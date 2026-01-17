@@ -1,4 +1,5 @@
-﻿# ===================================================================
+﻿﻿# ===================================================================
+# ===================================================================
 # 機能関数ファイル (v12.1)
 # ===================================================================
 # Task Manager Functions (v12.1)
@@ -5419,36 +5420,33 @@ function Initialize-CalendarView {
     if ($script:calendarGrid) { $script:calendarGrid.Tag = $script:selectedCalendarDate }
     $script:lblMonthYear.Text = $script:currentCalendarDate.ToString("yyyy年 MM月")
 
-    # Common action for navigation (script-scoped to be accessible by event handlers)
-    $script:navigateAction = {
-        param($newDate)
-        $script:currentCalendarDate = $newDate
-        $script:lblMonthYear.Text = $script:currentCalendarDate.ToString("yyyy年 MM月")
-        # Directly call the update function to redraw the calendar for the new month
-        Update-CalendarGrid -dateInMonth $script:currentCalendarDate
-    }
-
     # Navigation button events
     if (-not $script:isCalendarNavEventsAttached) {
-    if ($script:btnPrevYear.Tag -ne "EventsAttached") {
-        $script:btnPrevYear.Add_Click({ & $script:navigateAction $script:currentCalendarDate.AddYears(-1) })
-        $script:btnPrevYear.Tag = "EventsAttached"
-    }
-    if ($script:btnPrevMonth.Tag -ne "EventsAttached") {
-        $script:btnPrevMonth.Add_Click({ & $script:navigateAction $script:currentCalendarDate.AddMonths(-1) })
-        $script:btnPrevMonth.Tag = "EventsAttached"
-    }
-    if ($script:btnNextMonth.Tag -ne "EventsAttached") {
-        $script:btnNextMonth.Add_Click({ & $script:navigateAction $script:currentCalendarDate.AddMonths(1) })
-        $script:btnNextMonth.Tag = "EventsAttached"
-    }
-    if ($script:btnNextYear.Tag -ne "EventsAttached") {
-        $script:btnNextYear.Add_Click({ & $script:navigateAction $script:currentCalendarDate.AddYears(1) })
-        $script:isCalendarNavEventsAttached = $true
-        $script:btnNextYear.Tag = "EventsAttached"
-    }
+        $script:btnPrevYear.Add_Click({ 
+            $script:currentCalendarDate = $script:currentCalendarDate.AddYears(-1)
+            $script:lblMonthYear.Text = $script:currentCalendarDate.ToString("yyyy年 MM月")
+            Update-CalendarGrid -dateInMonth $script:currentCalendarDate
+        })
+        
+        $script:btnPrevMonth.Add_Click({ 
+            $script:currentCalendarDate = $script:currentCalendarDate.AddMonths(-1)
+            $script:lblMonthYear.Text = $script:currentCalendarDate.ToString("yyyy年 MM月")
+            Update-CalendarGrid -dateInMonth $script:currentCalendarDate
+        })
 
-    # Initial calls are moved to the TabControl's SelectedIndexChanged event.
+        $script:btnNextMonth.Add_Click({ 
+            $script:currentCalendarDate = $script:currentCalendarDate.AddMonths(1)
+            $script:lblMonthYear.Text = $script:currentCalendarDate.ToString("yyyy年 MM月")
+            Update-CalendarGrid -dateInMonth $script:currentCalendarDate
+        })
+
+        $script:btnNextYear.Add_Click({ 
+            $script:currentCalendarDate = $script:currentCalendarDate.AddYears(1)
+            $script:lblMonthYear.Text = $script:currentCalendarDate.ToString("yyyy年 MM月")
+            Update-CalendarGrid -dateInMonth $script:currentCalendarDate
+        })
+        
+        $script:isCalendarNavEventsAttached = $true
     }
 }
 
@@ -6675,10 +6673,368 @@ function Reset-WindowPosition {
         $form.Location = New-Object System.Drawing.Point(100, 100)
     }
 }
-function Reset-WindowPosition {
-    param($form)
-    if ($form) {
-        $form.StartPosition = "Manual"
-        $form.Location = New-Object System.Drawing.Point(100, 100)
+
+function Show-IcsExchangeForm {
+    param($parentForm, [string]$initialTab = "Export")
+
+    # --- フォーム作成 ---
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "ICS連携 (インポート/エクスポート)"
+    $form.Size = New-Object System.Drawing.Size(450, 400)
+    $form.StartPosition = 'CenterParent'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+
+    # --- タブコントロール ---
+    $tabControl = New-Object System.Windows.Forms.TabControl
+    $tabControl.Dock = 'Fill'
+    $form.Controls.Add($tabControl)
+
+    # =================================================================
+    # タブ1: エクスポート
+    # =================================================================
+    $tabExport = New-Object System.Windows.Forms.TabPage "エクスポート"
+    $tabControl.TabPages.Add($tabExport)
+
+    $grpPeriod = New-Object System.Windows.Forms.GroupBox
+    $grpPeriod.Text = "期間指定"
+    $grpPeriod.Location = New-Object System.Drawing.Point(15, 15)
+    $grpPeriod.Size = New-Object System.Drawing.Size(400, 140)
+    $tabExport.Controls.Add($grpPeriod)
+
+    $radioToday = New-Object System.Windows.Forms.RadioButton; $radioToday.Text = "今日"; $radioToday.Location = "15, 25"; $radioToday.AutoSize = $true
+    $radioMonth = New-Object System.Windows.Forms.RadioButton; $radioMonth.Text = "今月"; $radioMonth.Location = "80, 25"; $radioMonth.AutoSize = $true
+    $radioAll = New-Object System.Windows.Forms.RadioButton; $radioAll.Text = "全期間"; $radioAll.Location = "145, 25"; $radioAll.AutoSize = $true; $radioAll.Checked = $true
+    $radioCustom = New-Object System.Windows.Forms.RadioButton; $radioCustom.Text = "カスタム"; $radioCustom.Location = "220, 25"; $radioCustom.AutoSize = $true
+    
+    $grpPeriod.Controls.AddRange(@($radioToday, $radioMonth, $radioAll, $radioCustom))
+
+    $lblStart = New-Object System.Windows.Forms.Label; $lblStart.Text = "開始:"; $lblStart.Location = "30, 60"; $lblStart.AutoSize = $true
+    $dtpStart = New-Object System.Windows.Forms.DateTimePicker; $dtpStart.Format = 'Short'; $dtpStart.Location = "70, 57"; $dtpStart.Width = 100; $dtpStart.Enabled = $false
+    $lblEnd = New-Object System.Windows.Forms.Label; $lblEnd.Text = "終了:"; $lblEnd.Location = "190, 60"; $lblEnd.AutoSize = $true
+    $dtpEnd = New-Object System.Windows.Forms.DateTimePicker; $dtpEnd.Format = 'Short'; $dtpEnd.Location = "230, 57"; $dtpEnd.Width = 100; $dtpEnd.Enabled = $false
+
+    $grpPeriod.Controls.AddRange(@($lblStart, $dtpStart, $lblEnd, $dtpEnd))
+
+    # ラジオボタンイベント
+    $toggleCustomDate = {
+        $dtpStart.Enabled = $radioCustom.Checked
+        $dtpEnd.Enabled = $radioCustom.Checked
     }
+    $radioToday.Add_CheckedChanged($toggleCustomDate)
+    $radioMonth.Add_CheckedChanged($toggleCustomDate)
+    $radioAll.Add_CheckedChanged($toggleCustomDate)
+    $radioCustom.Add_CheckedChanged($toggleCustomDate)
+
+    $grpTarget = New-Object System.Windows.Forms.GroupBox
+    $grpTarget.Text = "出力対象"
+    $grpTarget.Location = New-Object System.Drawing.Point(15, 170)
+    $grpTarget.Size = New-Object System.Drawing.Size(400, 60)
+    $tabExport.Controls.Add($grpTarget)
+
+    $chkIncludeTasks = New-Object System.Windows.Forms.CheckBox; $chkIncludeTasks.Text = "タスクを含める"; $chkIncludeTasks.Location = "15, 25"; $chkIncludeTasks.AutoSize = $true; $chkIncludeTasks.Checked = $true
+    $chkIncludeEvents = New-Object System.Windows.Forms.CheckBox; $chkIncludeEvents.Text = "予定（イベント）を含める"; $chkIncludeEvents.Location = "150, 25"; $chkIncludeEvents.AutoSize = $true; $chkIncludeEvents.Checked = $true
+    $grpTarget.Controls.AddRange(@($chkIncludeTasks, $chkIncludeEvents))
+
+    $btnExport = New-Object System.Windows.Forms.Button
+    $btnExport.Text = "ICSファイルを保存してエクスポート"
+    $btnExport.Location = New-Object System.Drawing.Point(80, 250)
+    $btnExport.Size = New-Object System.Drawing.Size(250, 35)
+    $tabExport.Controls.Add($btnExport)
+
+    $btnExport.Add_Click({
+        Write-Host "エクスポート処理開始"
+        # 1. 期間の決定
+        $startRange = [DateTime]::MinValue
+        $endRange = [DateTime]::MaxValue
+        $today = (Get-Date).Date
+
+        if ($radioToday.Checked) {
+            $startRange = $today
+            $endRange = $today.AddDays(1).AddSeconds(-1)
+        } elseif ($radioMonth.Checked) {
+            $startRange = Get-Date -Year $today.Year -Month $today.Month -Day 1 -Hour 0 -Minute 0 -Second 0
+            $endRange = $startRange.AddMonths(1).AddSeconds(-1)
+        } elseif ($radioCustom.Checked) {
+            $startRange = $dtpStart.Value.Date
+            $endRange = $dtpEnd.Value.Date.AddDays(1).AddSeconds(-1)
+        }
+        # 全期間の場合は初期値のまま
+
+        # 2. データの抽出
+        $tasksToExport = @()
+        if ($chkIncludeTasks.Checked) {
+            $tasksToExport = $script:AllTasks | Where-Object {
+                if (-not [string]::IsNullOrWhiteSpace($_.期日)) {
+                    try {
+                        $d = [datetime]$_.期日
+                        return $d -ge $startRange -and $d -le $endRange
+                    } catch { $false }
+                } else { $false }
+            }
+        }
+
+        $eventsToExport = @()
+        if ($chkIncludeEvents.Checked) {
+            if ($script:AllEvents) {
+                foreach ($prop in $script:AllEvents.PSObject.Properties) {
+                    $evts = $prop.Value
+                    if ($evts -isnot [array]) { $evts = @($evts) }
+                    foreach ($evt in $evts) {
+                        $evtStart = $null
+                        if ($evt.PSObject.Properties['StartTime']) {
+                            try { $evtStart = [datetime]$evt.StartTime } catch {}
+                        } elseif ($evt.PSObject.Properties['EventDate']) {
+                            try { $evtStart = [datetime]$evt.EventDate } catch {}
+                        }
+                        if (-not $evtStart) { try { $evtStart = [datetime]$prop.Name } catch {} }
+
+                        if ($evtStart) {
+                            if ($evtStart -ge $startRange -and $evtStart -le $endRange) {
+                                $eventsToExport += $evt
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($tasksToExport.Count -eq 0 -and $eventsToExport.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show("指定された条件に該当するデータがありません。", "情報", "OK", "Information")
+            return
+        }
+
+        # 3. 保存先選択
+        $sfd = New-Object System.Windows.Forms.SaveFileDialog
+        $sfd.Filter = "iCalendar ファイル (*.ics)|*.ics"
+        $sfd.FileName = "exported_tasks.ics"
+        
+        if ($sfd.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return }
+
+        # 4. ICS生成
+        try {
+            $sb = [System.Text.StringBuilder]::new()
+            [void]$sb.AppendLine("BEGIN:VCALENDAR")
+            [void]$sb.AppendLine("VERSION:2.0")
+            [void]$sb.AppendLine("PRODID:-//PowerShellTaskManager//NONSGML v1.0//EN")
+            $dtStamp = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+
+            foreach ($task in $tasksToExport) {
+                try {
+                    $rawDate = $task.期日; $dt = [DateTime]::Parse($rawDate); $isAllDay = $rawDate -match "^\d{4}[-/]\d{1,2}[-/]\d{1,2}$"
+                    [void]$sb.AppendLine("BEGIN:VEVENT"); [void]$sb.AppendLine("SUMMARY:$($task.タスク)")
+                    $desc = ""; if ($task.カテゴリ) { $desc += "カテゴリ: $($task.カテゴリ)\n" }; if ($task.進捗度) { $desc += "進捗: $($task.進捗度)\n" }; if ($task.優先度) { $desc += "優先度: $($task.優先度)" }
+                    [void]$sb.AppendLine("DESCRIPTION:$desc")
+                    if ($isAllDay) { [void]$sb.AppendLine("DTSTART;VALUE=DATE:$($dt.ToString('yyyyMMdd'))"); [void]$sb.AppendLine("DTEND;VALUE=DATE:$($dt.AddDays(1).ToString('yyyyMMdd'))") }
+                    else { $utcStart = $dt.ToUniversalTime(); [void]$sb.AppendLine("DTSTART:$($utcStart.ToString('yyyyMMddTHHmmssZ'))"); [void]$sb.AppendLine("DTEND:$($utcStart.AddHours(1).ToString('yyyyMMddTHHmmssZ'))") }
+                    [void]$sb.AppendLine("UID:$($task.ID)"); [void]$sb.AppendLine("DTSTAMP:$dtStamp"); [void]$sb.AppendLine("END:VEVENT")
+                } catch {}
+            }
+
+            foreach ($evt in $eventsToExport) {
+                try {
+                    [void]$sb.AppendLine("BEGIN:VEVENT"); [void]$sb.AppendLine("SUMMARY:$($evt.Title)"); [void]$sb.AppendLine("UID:$($evt.ID)"); [void]$sb.AppendLine("DTSTAMP:$dtStamp")
+                    if ($evt.IsAllDay) {
+                        $s = [datetime]$evt.StartTime; $e = if ($evt.EndTime) { [datetime]$evt.EndTime } else { $s.AddDays(1) }
+                        if ($e -le $s) { $e = $s.AddDays(1) }
+                        [void]$sb.AppendLine("DTSTART;VALUE=DATE:$($s.ToString('yyyyMMdd'))"); [void]$sb.AppendLine("DTEND;VALUE=DATE:$($e.ToString('yyyyMMdd'))")
+                    } else {
+                        $s = ([datetime]$evt.StartTime).ToUniversalTime(); $e = ([datetime]$evt.EndTime).ToUniversalTime()
+                        [void]$sb.AppendLine("DTSTART:$($s.ToString('yyyyMMddTHHmmssZ'))"); [void]$sb.AppendLine("DTEND:$($e.ToString('yyyyMMddTHHmmssZ'))")
+                    }
+                    [void]$sb.AppendLine("END:VEVENT")
+                } catch {}
+            }
+
+            [void]$sb.AppendLine("END:VCALENDAR")
+            $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+            [System.IO.File]::WriteAllText($sfd.FileName, $sb.ToString(), $utf8NoBom)
+            $count = $tasksToExport.Count + $eventsToExport.Count
+            [System.Windows.Forms.MessageBox]::Show("エクスポートが完了しました。`n出力件数: $count 件", "完了", "OK", "Information")
+            $form.Close()
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("エクスポートに失敗しました: $($_.Exception.Message)", "エラー", "OK", "Error")
+        }
+    })
+
+    # =================================================================
+    # タブ2: インポート
+    # =================================================================
+    $tabImport = New-Object System.Windows.Forms.TabPage "インポート"
+    $tabControl.TabPages.Add($tabImport)
+
+    $grpFile = New-Object System.Windows.Forms.GroupBox
+    $grpFile.Text = "ファイル選択"
+    $grpFile.Location = New-Object System.Drawing.Point(15, 15)
+    $grpFile.Size = New-Object System.Drawing.Size(400, 80)
+    $tabImport.Controls.Add($grpFile)
+
+    $txtFilePath = New-Object System.Windows.Forms.TextBox
+    $txtFilePath.Location = New-Object System.Drawing.Point(15, 30)
+    $txtFilePath.Size = New-Object System.Drawing.Size(280, 23)
+    $grpFile.Controls.Add($txtFilePath)
+
+    $btnBrowse = New-Object System.Windows.Forms.Button
+    $btnBrowse.Text = "参照"
+    $btnBrowse.Location = New-Object System.Drawing.Point(305, 28)
+    $btnBrowse.Size = New-Object System.Drawing.Size(80, 27)
+    $grpFile.Controls.Add($btnBrowse)
+
+    $btnBrowse.Add_Click({
+        $ofd = New-Object System.Windows.Forms.OpenFileDialog
+        $ofd.Filter = "iCalendar ファイル (*.ics)|*.ics|すべてのファイル (*.*)|*.*"
+        if ($ofd.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $txtFilePath.Text = $ofd.FileName
+        }
+    })
+
+    $grpConflict = New-Object System.Windows.Forms.GroupBox
+    $grpConflict.Text = "重複時の処理"
+    $grpConflict.Location = New-Object System.Drawing.Point(15, 110)
+    $grpConflict.Size = New-Object System.Drawing.Size(400, 80)
+    $tabImport.Controls.Add($grpConflict)
+
+    $radioSkip = New-Object System.Windows.Forms.RadioButton; $radioSkip.Text = "スキップ（既存優先）"; $radioSkip.Location = "15, 30"; $radioSkip.AutoSize = $true; $radioSkip.Checked = $true
+    $radioOverwrite = New-Object System.Windows.Forms.RadioButton; $radioOverwrite.Text = "上書き（インポート優先）"; $radioOverwrite.Location = "180, 30"; $radioOverwrite.AutoSize = $true
+    $grpConflict.Controls.AddRange(@($radioSkip, $radioOverwrite))
+
+    $btnImport = New-Object System.Windows.Forms.Button
+    $btnImport.Text = "インポート開始"
+    $btnImport.Location = New-Object System.Drawing.Point(120, 220)
+    $btnImport.Size = New-Object System.Drawing.Size(180, 35)
+    $tabImport.Controls.Add($btnImport)
+
+    $btnImport.Add_Click({
+        $filePath = $txtFilePath.Text
+        if ([string]::IsNullOrWhiteSpace($filePath) -or -not (Test-Path $filePath)) {
+            [System.Windows.Forms.MessageBox]::Show("有効なファイルを選択してください。", "エラー", "OK", "Error")
+            return
+        }
+
+        $mode = if ($radioOverwrite.Checked) { "Overwrite" } else { "Skip" }
+        
+        try {
+            # 1. ファイル読み込みと行の折り返し(Folding)の復元
+            $content = [System.IO.File]::ReadAllText($filePath, [System.Text.Encoding]::UTF8)
+            $content = $content -replace "`r`n[ \t]", "" 
+
+            # 2. VEVENTブロックの抽出
+            $eventMatches = [regex]::Matches($content, "(?s)BEGIN:VEVENT(.*?)END:VEVENT")
+            
+            $countImported = 0; $countSkipped = 0; $countUpdated = 0
+            
+            # 新規タスク用のデフォルトプロジェクトID取得
+            $defaultProject = $script:Projects | Where-Object { $_.ProjectName -eq "未分類" } | Select-Object -First 1
+            $defaultProjectId = if ($defaultProject) { $defaultProject.ProjectID } else { 
+                $newP = [PSCustomObject]@{ ProjectID = [guid]::NewGuid().ToString(); ProjectName = "未分類"; ProjectDueDate = $null; WorkFiles = @(); Notification = "全体設定に従う"; ProjectColor = "#D3D3D3"; AutoArchiveTasks = $true }
+                $script:Projects += $newP; $newP.ProjectID
+            }
+
+            foreach ($match in $eventMatches) {
+                $block = $match.Groups[1].Value
+                $lines = $block -split "`r`n"
+                $props = @{}
+                foreach ($line in $lines) {
+                    if ($line -match "^([^;:]+)(?:;[^:]*)?:(.*)$") {
+                        $key = $matches[1].ToUpper(); $val = $matches[2]
+                        if (-not $props.ContainsKey($key)) { $props[$key] = $val }
+                    }
+                }
+
+                $uid = if ($props.ContainsKey("UID")) { $props["UID"] } else { [guid]::NewGuid().ToString() }
+                $summary = if ($props.ContainsKey("SUMMARY")) { $props["SUMMARY"] } else { "(No Title)" }
+                $description = if ($props.ContainsKey("DESCRIPTION")) { $props["DESCRIPTION"] -replace "\\n", "`r`n" } else { "" }
+                
+                # 日時の解析
+                $dtStartStr = if ($props.ContainsKey("DTSTART")) { $props["DTSTART"] } else { $null }
+                $dtEndStr = if ($props.ContainsKey("DTEND")) { $props["DTEND"] } else { $null }
+                $startTime = $null; $endTime = $null; $isAllDay = $false
+
+                if ($dtStartStr) {
+                    if ($dtStartStr -match "^\d{8}$") { $isAllDay = $true; $startTime = [DateTime]::ParseExact($dtStartStr, "yyyyMMdd", $null) }
+                    elseif ($dtStartStr -match "^\d{8}T\d{6}Z$") { $startTime = [DateTime]::ParseExact($dtStartStr, "yyyyMMddTHHmmssZ", $null, [System.Globalization.DateTimeStyles]::AssumeUniversal).ToLocalTime() }
+                    elseif ($dtStartStr -match "^\d{8}T\d{6}$") { $startTime = [DateTime]::ParseExact($dtStartStr, "yyyyMMddTHHmmss", $null) }
+                }
+                if ($dtEndStr) {
+                    if ($dtEndStr -match "^\d{8}$") { $endTime = [DateTime]::ParseExact($dtEndStr, "yyyyMMdd", $null) }
+                    elseif ($dtEndStr -match "^\d{8}T\d{6}Z$") { $endTime = [DateTime]::ParseExact($dtEndStr, "yyyyMMddTHHmmssZ", $null, [System.Globalization.DateTimeStyles]::AssumeUniversal).ToLocalTime() }
+                    elseif ($dtEndStr -match "^\d{8}T\d{6}$") { $endTime = [DateTime]::ParseExact($dtEndStr, "yyyyMMddTHHmmss", $null) }
+                }
+                if (-not $startTime) { continue }
+                if (-not $endTime) { $endTime = $startTime.AddHours(1) }
+
+                # 既存データの照合
+                $existingTask = $script:AllTasks | Where-Object { $_.ID -eq $uid } | Select-Object -First 1
+                $existingEvent = $null; $existingEventDateKey = $null
+                if (-not $existingTask) {
+                    foreach($key in $script:AllEvents.PSObject.Properties.Name) {
+                        $list = $script:AllEvents.$key
+                        if ($list) { foreach($evt in $list) { if ($evt.ID -eq $uid) { $existingEvent = $evt; $existingEventDateKey = $key; break } } }
+                        if ($existingEvent) { break }
+                    }
+                }
+
+                if ($existingTask) {
+                    if ($mode -eq "Skip") { $countSkipped++; continue }
+                    # タスク更新
+                    $existingTask.タスク = $summary
+                    $existingTask.期日 = if ($isAllDay) { $startTime.ToString("yyyy-MM-dd") } else { $startTime.ToString("yyyy-MM-dd HH:mm") }
+                    if ($description -match "カテゴリ:\s*(.*?)(\r\n|$)") { $existingTask.カテゴリ = $matches[1].Trim() }
+                    if ($description -match "進捗:\s*(.*?)(\r\n|$)") { $existingTask.進捗度 = $matches[1].Trim() }
+                    if ($description -match "優先度:\s*(.*?)(\r\n|$)") { $existingTask.優先度 = $matches[1].Trim() }
+                    $countUpdated++
+                } elseif ($existingEvent) {
+                    if ($mode -eq "Skip") { $countSkipped++; continue }
+                    # イベント更新
+                    $newDateKey = $startTime.ToString("yyyy-MM-dd")
+                    $existingEvent.Title = $summary; $existingEvent.StartTime = $startTime.ToString("o"); $existingEvent.EndTime = $endTime.ToString("o"); $existingEvent.IsAllDay = $isAllDay
+                    if ($newDateKey -ne $existingEventDateKey) {
+                        $oldList = [System.Collections.ArrayList]@($script:AllEvents.$existingEventDateKey); $oldList.Remove($existingEvent); $script:AllEvents.$existingEventDateKey = $oldList.ToArray()
+                        if (-not $script:AllEvents.PSObject.Properties[$newDateKey]) { $script:AllEvents | Add-Member -MemberType NoteProperty -Name $newDateKey -Value @() }
+                        $newList = [System.Collections.ArrayList]@($script:AllEvents.$newDateKey); $newList.Add($existingEvent); $script:AllEvents.$newDateKey = $newList.ToArray()
+                    }
+                    $countUpdated++
+                } else {
+                    # 新規登録
+                    $isTask = ($description -match "カテゴリ:" -or $description -match "進捗:")
+                    if ($isTask) {
+                        $cat = ""; $stat = "未実施"; $prio = "中"
+                        if ($description -match "カテゴリ:\s*(.*?)(\r\n|$)") { $cat = $matches[1].Trim() }
+                        if ($description -match "進捗:\s*(.*?)(\r\n|$)") { $stat = $matches[1].Trim() }
+                        if ($description -match "優先度:\s*(.*?)(\r\n|$)") { $prio = $matches[1].Trim() }
+                        $newTask = [PSCustomObject]@{
+                            ID = $uid; ProjectID = $defaultProjectId; タスク = $summary; 進捗度 = $stat; 優先度 = $prio
+                            期日 = if ($isAllDay) { $startTime.ToString("yyyy-MM-dd") } else { $startTime.ToString("yyyy-MM-dd HH:mm") }
+                            カテゴリ = $cat; サブカテゴリ = ""; 通知設定 = "全体設定に従う"; 保存日付 = (Get-Date).ToString("yyyy-MM-dd")
+                            完了日 = ""; TrackedTimeSeconds = 0; WorkFiles = ""
+                        }
+                        $script:AllTasks += $newTask
+                    } else {
+                        $newEvent = [PSCustomObject]@{ ID = $uid; Title = $summary; StartTime = $startTime.ToString("o"); EndTime = $endTime.ToString("o"); IsAllDay = $isAllDay }
+                        $dateKey = $startTime.ToString("yyyy-MM-dd")
+                        if (-not $script:AllEvents.PSObject.Properties[$dateKey]) { $script:AllEvents | Add-Member -MemberType NoteProperty -Name $dateKey -Value @() }
+                        $evList = [System.Collections.ArrayList]@($script:AllEvents.$dateKey); $evList.Add($newEvent); $script:AllEvents.$dateKey = $evList.ToArray()
+                    }
+                    $countImported++
+                }
+            }
+
+            # 保存と更新
+            Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
+            Save-Events
+            Update-AllViews
+            
+            [System.Windows.Forms.MessageBox]::Show("インポートが完了しました。`n新規: $countImported 件`n更新: $countUpdated 件`nスキップ: $countSkipped 件", "完了", "OK", "Information")
+            $form.Close()
+
+        } catch {
+            [System.Windows.Forms.MessageBox]::Show("インポート中にエラーが発生しました: $($_.Exception.Message)", "エラー", "OK", "Error")
+        }
+    })
+
+    # --- 共通設定 ---
+    Set-Theme -form $form -IsDarkMode $script:isDarkMode
+    if ($initialTab -eq "Import") { $tabControl.SelectedTab = $tabImport }
+    $form.ShowDialog($parentForm) | Out-Null
 }
