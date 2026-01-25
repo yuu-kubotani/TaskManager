@@ -133,6 +133,9 @@ $script:notifiedLogPath = Join-Path -Path $scriptRoot -ChildPath "notified.log"
 $script:EventsFile = Join-Path -Path $scriptRoot -ChildPath "events.json"
 $script:TimeLogsFile = Join-Path -Path $scriptRoot -ChildPath "timelogs.json"
 $script:StatusLogsFile = Join-Path -Path $scriptRoot -ChildPath "status_logs.json"
+$script:RecurringRulesFile = Join-Path -Path $scriptRoot -ChildPath "recurring_rules.json"
+$script:ArchivedTasksFile = Join-Path -Path $scriptRoot -ChildPath "archived_tasks.csv"
+$script:ArchivedProjectsFile = Join-Path -Path $scriptRoot -ChildPath "archived_projects.json"
 
 # -----------------------------------------------------------------
 # ユーザーが自由に編集できる「分析ルール設定」
@@ -351,6 +354,7 @@ try {
 }
 Invoke-AutoArchiving
 Invoke-ProjectAutoArchiving
+Invoke-RecurringTasks # アプリ起動時に定期タスク生成エンジンを実行
 # --- メインフォームの作成 ---
 $mainForm = New-Object System.Windows.Forms.Form
 $mainForm.Text = "タスク管理マネージャー v12.0"
@@ -383,7 +387,11 @@ $fileMenuItem.DropDownItems.AddRange(@($addNewTaskMenuItem, $addNewEventMenuItem
 $editMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("編集(&E)")
 $editCategoriesMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("カテゴリの編集(&C)")
 $editTemplatesMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("テンプレートの編集(&M)")
-$editMenuItem.DropDownItems.AddRange(@($editCategoriesMenuItem, $editTemplatesMenuItem))
+$manageRecurringMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("定期タスクの設定(&R)")
+$manageRecurringMenuItem.Add_Click({
+    Show-RecurringRuleEditor -parentForm $mainForm
+})
+$editMenuItem.DropDownItems.AddRange(@($editCategoriesMenuItem, $editTemplatesMenuItem, $manageRecurringMenuItem))
 
 # 表示 メニュー
 
@@ -513,6 +521,23 @@ $mainContainer.SplitterDistance = 600
 $mainForm.Controls.Add($mainContainer)
 $mainContainer.BringToFront()
 
+# --- 通知パネル (メインコンテナの上に追加) ---
+$script:notificationPanel = New-Object System.Windows.Forms.Panel
+$script:notificationPanel.Dock = "Top"
+$script:notificationPanel.Height = 30
+$script:notificationPanel.BackColor = [System.Drawing.Color]::LightYellow
+$script:notificationPanel.Visible = $false
+$mainForm.Controls.Add($script:notificationPanel)
+$script:notificationPanel.BringToFront() # ツールバーの下、コンテナの上
+
+$script:lblNotification = New-Object System.Windows.Forms.Label
+$script:lblNotification.Dock = "Fill"
+$script:lblNotification.TextAlign = "MiddleCenter"
+$script:lblNotification.Font = New-Object System.Drawing.Font("Meiryo UI", 9, [System.Drawing.FontStyle]::Bold)
+$script:lblNotification.Cursor = [System.Windows.Forms.Cursors]::Hand
+$script:notificationPanel.Controls.Add($script:lblNotification)
+$script:lblNotification.Add_Click({ Invoke-RecurringTasks; Update-AllViews })
+
 # --- 上部パネル (タブコントロール) ---
 $tabControl = New-Object System.Windows.Forms.TabControl
 $tabControl.Dock = "Fill"
@@ -557,7 +582,7 @@ $listTabPage = New-Object System.Windows.Forms.TabPage "リスト表示"
 $tabControl.TabPages.Add($listTabPage) | Out-Null
 
 $script:taskDataGridView = New-Object System.Windows.Forms.DataGridView
-$script:taskDataGridView.Dock = "Fill"; $script:taskDataGridView.AllowUserToAddRows = $false; $script:taskDataGridView.RowHeadersVisible = $false; $script:taskDataGridView.SelectionMode = "FullRowSelect"; $script:taskDataGridView.MultiSelect = $false; $script:taskDataGridView.ReadOnly = $true; $script:taskDataGridView.AllowUserToResizeRows = $false; $script:taskDataGridView.ColumnHeadersHeightSizeMode = "AutoSize"; $script:taskDataGridView.CellBorderStyle = "SingleHorizontal"
+$script:taskDataGridView.Dock = "Fill"; $script:taskDataGridView.AllowUserToAddRows = $false; $script:taskDataGridView.RowHeadersVisible = $false; $script:taskDataGridView.SelectionMode = "FullRowSelect"; $script:taskDataGridView.MultiSelect = $true; $script:taskDataGridView.ReadOnly = $true; $script:taskDataGridView.AllowUserToResizeRows = $false; $script:taskDataGridView.ColumnHeadersHeightSizeMode = "AutoSize"; $script:taskDataGridView.CellBorderStyle = "SingleHorizontal"
 $listTabPage.Controls.Add($script:taskDataGridView)
 
 # --- DataGridView 右クリックメニュー (機能復元) ---
@@ -587,35 +612,117 @@ foreach ($status in $script:TaskStatuses) {
 $dgvProjectPropertiesMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("プロパティの編集")
 $dgvProjectDeleteMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("削除")
 $dgvArchiveMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("アーカイブ")
+$dgvMakeRecurringMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("このアイテムを定期ルールに登録")
+$dgvProjectMakeRecurringMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("このアイテムを定期ルールに登録")
+$dgvBulkCompleteMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("選択したタスクを一括完了")
+$dgvBulkDeleteMenuItem = New-Object System.Windows.Forms.ToolStripMenuItem("選択したタスクを一括削除")
 
-$dgvContextMenu.Items.AddRange(@($dgvEditMenuItem, $dgvDeleteMenuItem, $dgvChangeStatusMenuItem, $dgvProjectPropertiesMenuItem, $dgvProjectDeleteMenuItem, $dgvArchiveMenuItem))
+$dgvMakeRecurringMenuItem.Add_Click({
+    if ($script:taskDataGridView.SelectedRows.Count -gt 0) {
+        $task = $script:taskDataGridView.SelectedRows[0].Tag
+        New-RecurringRuleFromItem -item $task
+        Show-RecurringRuleEditor -parentForm $mainForm -initialItem $task -initialType "Task"
+    }
+})
+$dgvProjectMakeRecurringMenuItem.Add_Click({ if ($script:taskDataGridView.SelectedRows.Count -gt 0) { New-RecurringRuleFromItem -item $script:taskDataGridView.SelectedRows[0].Tag } })
+$dgvProjectMakeRecurringMenuItem.Add_Click({ if ($script:taskDataGridView.SelectedRows.Count -gt 0) { Show-RecurringRuleEditor -parentForm $mainForm -initialItem $script:taskDataGridView.SelectedRows[0].Tag -initialType "Project" } })
+
+$dgvContextMenu.Items.AddRange(@($dgvEditMenuItem, $dgvDeleteMenuItem, $dgvChangeStatusMenuItem, $dgvBulkCompleteMenuItem, $dgvBulkDeleteMenuItem, $dgvMakeRecurringMenuItem, $dgvProjectPropertiesMenuItem, $dgvProjectMakeRecurringMenuItem, $dgvProjectDeleteMenuItem, $dgvArchiveMenuItem))
 $script:taskDataGridView.ContextMenuStrip = $dgvContextMenu
 
 $dgvContextMenu.Add_Opening({
     param($source, $e)
-    if ($script:taskDataGridView.SelectedRows.Count -eq 0) {
+    $selectedCount = $script:taskDataGridView.SelectedRows.Count
+    if ($selectedCount -eq 0) {
         $e.Cancel = $true
         return
     }
+
+    # 複数選択時は一括操作のみ表示
+    $isMultiSelect = $selectedCount -gt 1
+    $dgvBulkCompleteMenuItem.Visible = $isMultiSelect
+    $dgvBulkDeleteMenuItem.Visible = $isMultiSelect
+
     $item = $script:taskDataGridView.SelectedRows[0].Tag
-    if ($null -eq $item) {
-        $e.Cancel = $true
-        return
-    }
 
     $isProject = $item.PSObject.Properties.Name -contains 'ProjectName'
-    $dgvEditMenuItem.Visible = -not $isProject
-    $dgvDeleteMenuItem.Visible = -not $isProject
-    $dgvChangeStatusMenuItem.Visible = -not $isProject
-    $dgvProjectPropertiesMenuItem.Visible = $isProject
-    $dgvProjectDeleteMenuItem.Visible = $isProject
-    $dgvArchiveMenuItem.Visible = $true # Archive is always visible if an item is selected
+    $dgvEditMenuItem.Visible = (-not $isProject) -and (-not $isMultiSelect)
+    $dgvDeleteMenuItem.Visible = (-not $isProject) -and (-not $isMultiSelect)
+    $dgvChangeStatusMenuItem.Visible = (-not $isProject) -and (-not $isMultiSelect)
+    $dgvMakeRecurringMenuItem.Visible = (-not $isProject) -and (-not $isMultiSelect)
+    $dgvProjectPropertiesMenuItem.Visible = $isProject -and (-not $isMultiSelect)
+    $dgvProjectMakeRecurringMenuItem.Visible = $isProject -and (-not $isMultiSelect)
+    $dgvProjectDeleteMenuItem.Visible = $isProject -and (-not $isMultiSelect)
+    $dgvArchiveMenuItem.Visible = (-not $isMultiSelect) # アーカイブは単一選択時のみ許可
 
     # タスクの場合、現在のステータスをメニューから非表示にする
-    if (-not $isProject) {
+    if ((-not $isProject) -and (-not $isMultiSelect)) {
         $currentStatus = $item.進捗度
         foreach ($subMenuItem in $dgvChangeStatusMenuItem.DropDownItems) {
             $subMenuItem.Visible = ($subMenuItem.Tag -ne $currentStatus)
+        }
+    }
+})
+
+$dgvBulkCompleteMenuItem.Add_Click({
+    $selectedTasks = @()
+    foreach ($row in $script:taskDataGridView.SelectedRows) {
+        $t = $row.Tag
+        # プロジェクト行と既に完了済みのタスクは除外
+        if ($t -and $t.PSObject.Properties['ID'] -and $t.進捗度 -ne '完了済み') {
+            $selectedTasks += $t
+        }
+    }
+    
+    if ($selectedTasks.Count -gt 0) {
+        $timestamp = (Get-Date).ToString("o")
+        $todayStr = (Get-Date).ToString("yyyy-MM-dd")
+        
+        # ログ読み込み
+        $currentStatusLogs = @()
+        if (Test-Path $script:StatusLogsFile) {
+            try { $currentStatusLogs = Get-Content -Path $script:StatusLogsFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+            if ($currentStatusLogs -isnot [array]) { $currentStatusLogs = @($currentStatusLogs) }
+        }
+
+        foreach ($t in $selectedTasks) {
+            $oldStatus = $t.進捗度
+            $t.進捗度 = '完了済み'
+            if ([string]::IsNullOrEmpty($t.完了日)) { $t.完了日 = $todayStr }
+            
+            $currentStatusLogs += [PSCustomObject]@{
+                TaskID = $t.ID
+                OldStatus = $oldStatus
+                NewStatus = '完了済み'
+                Timestamp = $timestamp
+            }
+        }
+        
+        # 保存
+        try { $currentStatusLogs | ConvertTo-Json -Depth 2 | Set-Content -Path $script:StatusLogsFile -Encoding UTF8 -Force } catch {}
+        Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
+        
+        Invoke-ProjectAutoArchiving
+        Update-AllViews
+    }
+})
+
+$dgvBulkDeleteMenuItem.Add_Click({
+    $selectedTasks = @()
+    foreach ($row in $script:taskDataGridView.SelectedRows) {
+        $t = $row.Tag
+        # プロジェクト行は除外
+        if ($t -and $t.PSObject.Properties['ID']) {
+            $selectedTasks += $t
+        }
+    }
+    
+    if ($selectedTasks.Count -gt 0) {
+        if ([System.Windows.Forms.MessageBox]::Show("選択した $($selectedTasks.Count) 件のタスクを削除しますか？", "一括削除", "YesNo", "Warning") -eq "Yes") {
+            $idsToDelete = $selectedTasks.ID
+            $script:AllTasks = @($script:AllTasks | Where-Object { $_.ID -notin $idsToDelete })
+            Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
+            Update-AllViews
         }
     }
 })
@@ -1077,6 +1184,9 @@ $dayInfoGroupBox.Controls.Add($script:dayInfoTableLayoutPanel)
 $script:timelinePanel = New-Object System.Windows.Forms.Panel
 $script:timelinePanel.Dock = "Fill"
 $script:timelinePanel.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+# --- チラつき防止: DoubleBufferedを有効化 ---
+$prop = [System.Windows.Forms.Control].GetProperty("DoubleBuffered", [System.Reflection.BindingFlags]"NonPublic, Instance")
+$prop.SetValue($script:timelinePanel, $true, $null)
 $calendarSplitContainer.Panel2.Controls.Add($script:timelinePanel)
 
 # --- タイムラインのインタラクションイベントハンドラ ---
@@ -1958,7 +2068,15 @@ $script:timelinePaintHandler = {
     $eventBrush.Dispose()
 
     # --- 4. 右側: 実績 (Actual) エリア ---
-    $logsForDay = $script:AllTimeLogs | Where-Object { $_.StartTime -and $_.EndTime -and ([datetime]$_.StartTime).Date -eq $selectedDate }
+    # パイプラインを使用せず高速化
+    $logsForDay = New-Object System.Collections.ArrayList
+    foreach ($log in $script:AllTimeLogs) {
+        if ($log.StartTime -and $log.EndTime) {
+            if (([datetime]$log.StartTime).Date -eq $selectedDate) {
+                [void]$logsForDay.Add($log)
+            }
+        }
+    }
 
     foreach ($log in $logsForDay) {
         $startTime = [datetime]$log.StartTime
@@ -2303,6 +2421,18 @@ function Update-AllViews {
         Update-DayInfoPanel -date $script:selectedCalendarDate
         Update-TimelineView -date $script:selectedCalendarDate
     }
+    Update-RecurringTaskNotification
+}
+
+function Update-RecurringTaskNotification {
+    $pending = Get-PendingRecurringTasks
+    if ($pending.Count -gt 0) {
+        $script:notificationPanel.Visible = $true
+        $script:lblNotification.Text = "⚠️ 未処理の定期タスクが $($pending.Count) 件あります（クリックして生成）"
+        $script:notificationPanel.BackColor = if ($script:isDarkMode) { [System.Drawing.Color]::FromArgb(100, 80, 0) } else { [System.Drawing.Color]::LightYellow }
+    } else {
+        $script:notificationPanel.Visible = $false
+    }
 }
 
 # --- イベントハンドラ ---
@@ -2484,12 +2614,22 @@ $tickEventHandler = {
             # 1秒ごとにUIを更新して、実行中のタイマーの表示を更新する
             # Update-DataGridViewは負荷が高いため、特定のセルだけを更新する
             try {
-                $taskRow = $script:taskDataGridView.Rows | Where-Object { $_.Tag -is [PSCustomObject] -and $_.Tag.ID -eq $task.ID } | Select-Object -First 1
+                # 高速化: パイプラインを使わずに該当行を検索
+                $taskRow = $null
+                foreach ($r in $script:taskDataGridView.Rows) {
+                    if ($r.Tag -is [PSCustomObject] -and $r.Tag.ID -eq $task.ID) { $taskRow = $r; break }
+                }
+
                 if ($taskRow) {
                     # --- タスクの合計時間を更新 ---
-                    $taskLogs = $script:AllTimeLogs | Where-Object { $_.TaskID -eq $task.ID -and $_.EndTime }
+                    # 高速化: ループで集計
                     $totalTaskSeconds = 0
-                    if($taskLogs){ $totalTaskSeconds = ($taskLogs | ForEach-Object { ([datetime]$_.EndTime - [datetime]$_.StartTime).TotalSeconds } | Measure-Object -Sum).Sum }
+                    foreach ($log in $script:AllTimeLogs) {
+                        if ($log.TaskID -eq $task.ID -and $log.EndTime) {
+                            $totalTaskSeconds += ([datetime]$log.EndTime - [datetime]$log.StartTime).TotalSeconds
+                        }
+                    }
+                    
                     $trackingLog = $script:AllTimeLogs | Where-Object { $_.TaskID -eq $task.ID -and -not $_.EndTime } | Select-Object -Last 1
                     if ($trackingLog) {
                         $totalTaskSeconds += (New-TimeSpan -Start ([datetime]$trackingLog.StartTime) -End (Get-Date)).TotalSeconds
@@ -2497,15 +2637,26 @@ $tickEventHandler = {
                     $taskRow.Cells["TrackedTime"].Value = Format-TimeSpanFromSeconds -totalSeconds $totalTaskSeconds
 
                     # --- ★ここから修正: プロジェクトの合計時間もリアルタイムで更新 ---
-                    $projectRow = $script:taskDataGridView.Rows | Where-Object { $_.Tag -is [PSCustomObject] -and $_.Tag.PSObject.Properties.Name -contains 'ProjectName' -and $_.Tag.ProjectID -eq $task.ProjectID } | Select-Object -First 1
+                    # 高速化: パイプライン除去とループ最適化
+                    $projectRow = $null
+                    foreach ($r in $script:taskDataGridView.Rows) {
+                        if ($r.Tag -is [PSCustomObject] -and $r.Tag.PSObject.Properties.Name -contains 'ProjectName' -and $r.Tag.ProjectID -eq $task.ProjectID) {
+                            $projectRow = $r; break
+                        }
+                    }
+
                     if ($projectRow) {
-                        $projectTasks = $script:AllTasks | Where-Object { $_.ProjectID -eq $task.ProjectID }
-                        $taskIdsInProject = $projectTasks | ForEach-Object { $_.ID }
+                        # HashSetを使って検索を高速化
+                        $taskIdsInProject = New-Object System.Collections.Generic.HashSet[string]
+                        foreach ($t in $script:AllTasks) {
+                            if ($t.ProjectID -eq $task.ProjectID) { [void]$taskIdsInProject.Add($t.ID) }
+                        }
                         
                         $totalProjectSeconds = 0
-                        $projectLogs = $script:AllTimeLogs | Where-Object { $taskIdsInProject -contains $_.TaskID -and $_.EndTime }
-                        if ($projectLogs) {
-                            $totalProjectSeconds = ($projectLogs | ForEach-Object { ([datetime]$_.EndTime - [datetime]$_.StartTime).TotalSeconds } | Measure-Object -Sum).Sum
+                        foreach ($log in $script:AllTimeLogs) {
+                            if ($log.EndTime -and $taskIdsInProject.Contains($log.TaskID)) {
+                                $totalProjectSeconds += ([datetime]$log.EndTime - [datetime]$log.StartTime).TotalSeconds
+                            }
                         }
 
                         # 現在実行中のタスクの時間を加算 (上記で計算済みの$trackingLogを再利用)

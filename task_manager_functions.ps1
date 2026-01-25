@@ -1,10 +1,44 @@
-﻿﻿# ===================================================================
-# ===================================================================
+﻿# ===================================================================
 # 機能関数ファイル (v12.1)
 # ===================================================================
 # Task Manager Functions (v12.1)
 
 # --- 内部ヘルパー関数 ---
+function Get-NextAdjustedDate {
+    param(
+        [datetime]$BaseDate,
+        [int]$IntervalDays,
+        [string]$WeekendShift = "None",
+        [string]$IntervalUnit = "Day"
+    )
+    $nextDate = $BaseDate.AddDays($IntervalDays)
+    
+    $nextDate = if ($IntervalUnit -eq "Month") {
+        $BaseDate.AddMonths($IntervalDays)
+    } else {
+        $BaseDate.AddDays($IntervalDays)
+    }
+    
+    if ($WeekendShift -eq "Friday") {
+        if ($nextDate.DayOfWeek -eq [DayOfWeek]::Saturday) { $nextDate = $nextDate.AddDays(-1) }
+        elseif ($nextDate.DayOfWeek -eq [DayOfWeek]::Sunday) { $nextDate = $nextDate.AddDays(-2) }
+    } elseif ($WeekendShift -eq "Monday") {
+        if ($nextDate.DayOfWeek -eq [DayOfWeek]::Saturday) { $nextDate = $nextDate.AddDays(2) }
+        elseif ($nextDate.DayOfWeek -eq [DayOfWeek]::Sunday) { $nextDate = $nextDate.AddDays(1) }
+    }
+    return $nextDate
+}
+
+function Get-Holidays {
+    return @{
+        "2026-01-01" = "元日"; "2026-01-12" = "成人の日"; "2026-02-11" = "建国記念の日"; "2026-02-23" = "天皇誕生日"
+        "2026-03-20" = "春分の日"; "2026-04-29" = "昭和の日"; "2026-05-03" = "憲法記念日"; "2026-05-04" = "みどりの日"
+        "2026-05-05" = "こどもの日"; "2026-05-06" = "振替休日"; "2026-07-20" = "海の日"; "2026-08-11" = "山の日"
+        "2026-09-21" = "敬老の日"; "2026-09-22" = "国民の休日"; "2026-09-23" = "秋分の日"; "2026-10-12" = "スポーツの日"
+        "2026-11-03" = "文化の日"; "2026-11-23" = "勤労感謝の日"
+    }
+}
+
 function Convert-ToStandardWorkFile {
     param($workFileObject)
 
@@ -976,7 +1010,7 @@ function Write-TasksToCsv {
         $propertyOrder = @(
             "ID", "ProjectID", "タスク", "進捗度", "優先度", "期日",
             "カテゴリ", "サブカテゴリ", "通知設定", "保存日付", "完了日",
-            "TrackedTimeSeconds", "WorkFiles"
+            "TrackedTimeSeconds", "WorkFiles", "VisibleDate"
         )
 
         $exportData = foreach ($task in $data) {
@@ -1039,7 +1073,8 @@ function Read-TasksFromCsv {
                 "保存日付"             = { (Get-Date).ToString("yyyy-MM-dd") };
                 "完了日"               = "";
                 "TrackedTimeSeconds"   = 0;
-                "WorkFiles"            = "" # デフォルトを空文字列に変更
+                "WorkFiles"            = ""; # デフォルトを空文字列に変更
+                "VisibleDate"          = ""
             }
             foreach ($propEntry in $requiredProperties.GetEnumerator()) {
                 if (-not $task.PSObject.Properties.Name.Contains($propEntry.Name)) {
@@ -1458,10 +1493,887 @@ function Show-MemoInputForm {
     if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $textMemo.Text } else { return $null }
 }
 
+function Show-RecurringRuleEditor {
+    param($parentForm, $initialRuleId = $null, $initialItem = $null, $initialType = $null)
+    
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "定期実行ルール統合管理 (Dynamic)"
+    $form.Size = New-Object System.Drawing.Size(900, 900)
+    $form.StartPosition = 'CenterParent'
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $false
+
+    # --- 変数の事前定義 (スコープエラー回避) ---
+    $dtpNextRun = New-Object System.Windows.Forms.DateTimePicker
+    $dtpNextRun.Format = 'Short'; $dtpNextRun.Width = 120
+
+    # --- レイアウト構造 (SplitContainer) ---
+    $splitContainer = New-Object System.Windows.Forms.SplitContainer
+    $splitContainer.Dock = "Fill"
+    $splitContainer.Orientation = "Horizontal"
+    $splitContainer.SplitterDistance = 220
+    $splitContainer.SplitterDistance = 150
+    $form.Controls.Add($splitContainer)
+
+    # --- 上部: ルール一覧 (DataGridView) ---
+    $dgv = New-Object System.Windows.Forms.DataGridView
+    $dgv.Dock = "Fill"
+    $dgv.AutoSizeColumnsMode = "Fill"
+    $dgv.AllowUserToAddRows = $false
+    $dgv.RowHeadersVisible = $false
+    $dgv.SelectionMode = "FullRowSelect"
+    $dgv.MultiSelect = $false
+    $dgv.ReadOnly = $false
+    $dgv.ColumnHeadersHeightSizeMode = "AutoSize"
+    
+    $colActive = New-Object System.Windows.Forms.DataGridViewCheckBoxColumn
+    $colActive.Name = "IsActive"
+    $colActive.HeaderText = "有効"
+    $colActive.Width = 40
+    $dgv.Columns.Add($colActive) | Out-Null
+
+    $dgv.Columns.Add("RuleID", "ID") | Out-Null
+    $dgv.Columns["RuleID"].Visible = $false
+    $dgv.Columns["RuleID"].ReadOnly = $true
+    $dgv.Columns.Add("Type", "種別") | Out-Null
+    $dgv.Columns["Type"].Width = 60
+    $dgv.Columns["Type"].ReadOnly = $true
+    $dgv.Columns.Add("Title", "タイトル") | Out-Null
+    $dgv.Columns["Title"].ReadOnly = $true
+    $dgv.Columns.Add("Interval", "間隔") | Out-Null
+    $dgv.Columns["Interval"].Width = 80
+    $dgv.Columns["Interval"].ReadOnly = $true
+    
+    $dgv.Columns.Add("NextGenDate", "次回生成") | Out-Null
+    $dgv.Columns["NextGenDate"].Width = 90
+    $dgv.Columns["NextGenDate"].ReadOnly = $true
+    $dgv.Columns.Add("NextDueDate", "次回期限") | Out-Null
+    $dgv.Columns["NextDueDate"].Width = 90
+    $dgv.Columns["NextDueDate"].ReadOnly = $true
+
+    $splitContainer.Panel1.Controls.Add($dgv)
+
+    # --- 下部: 動的編集エリア (FlowLayoutPanel) ---
+    $mainFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $mainFlow.Dock = "Fill"
+    $mainFlow.FlowDirection = "TopDown"
+    $mainFlow.WrapContents = $false
+    $mainFlow.AutoScroll = $true
+    $mainFlow.Padding = New-Object System.Windows.Forms.Padding(10)
+    $splitContainer.Panel2.Controls.Add($mainFlow)
+
+    # =================================================================
+    # 1. 基本情報セクション
+    # =================================================================
+    $grpBasic = New-Object System.Windows.Forms.GroupBox
+    $grpBasic.Text = "基本情報"
+    $grpBasic.Size = New-Object System.Drawing.Size(580, 80)
+    $grpBasic.AutoSize = $true
+    
+    $chkIsActive = New-Object System.Windows.Forms.CheckBox; $chkIsActive.Text = "このルールを有効にする"; $chkIsActive.Location = "15, 20"; $chkIsActive.AutoSize = $true; $chkIsActive.Checked = $true
+    $chkIsActive.Font = New-Object System.Drawing.Font("Meiryo UI", 10, [System.Drawing.FontStyle]::Bold)
+    
+    $lblTitle = New-Object System.Windows.Forms.Label; $lblTitle.Text = "タイトル:"; $lblTitle.Location = "15, 50"; $lblTitle.AutoSize = $true
+    $txtTitle = New-Object System.Windows.Forms.TextBox; $txtTitle.Location = "80, 47"; $txtTitle.Width = 450
+    
+    $grpBasic.Controls.AddRange(@($chkIsActive, $lblTitle, $txtTitle))
+    $mainFlow.Controls.Add($grpBasic)
+
+    # =================================================================
+    # 2. アイテム種別セクション
+    # =================================================================
+    $grpType = New-Object System.Windows.Forms.GroupBox
+    $grpType.Text = "アイテム種別"
+    $grpType.Size = New-Object System.Drawing.Size(580, 50)
+
+    $radioProject = New-Object System.Windows.Forms.RadioButton; $radioProject.Text = "プロジェクト"; $radioProject.Location = "20, 20"; $radioProject.AutoSize = $true
+    $radioTask = New-Object System.Windows.Forms.RadioButton; $radioTask.Text = "タスク"; $radioTask.Location = "100, 20"; $radioTask.AutoSize = $true; $radioTask.Checked = $true
+    $radioEvent = New-Object System.Windows.Forms.RadioButton; $radioEvent.Text = "予定 (イベント)"; $radioEvent.Location = "200, 20"; $radioEvent.AutoSize = $true
+    
+    $grpType.Controls.AddRange(@($radioProject, $radioTask, $radioEvent))
+    $mainFlow.Controls.Add($grpType)
+
+    # =================================================================
+    # 3. 生成設定 (Generation Settings)
+    # =================================================================
+    $grpGenSettings = New-Object System.Windows.Forms.GroupBox
+    $grpGenSettings.Text = "生成設定 (スケジュール)"
+    $grpGenSettings.AutoSize = $true
+    $grpGenSettings.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $grpGenSettings.MinimumSize = New-Object System.Drawing.Size(580, 0)
+    $grpGenSettings.Padding = New-Object System.Windows.Forms.Padding(5)
+
+    $genFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $genFlow.Dock = "Fill"
+    $genFlow.FlowDirection = "TopDown"
+    $genFlow.AutoSize = $true
+    $genFlow.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $genFlow.WrapContents = $false
+    $grpGenSettings.Controls.Add($genFlow)
+
+    # 3-1. 生成タイミング (Trigger/Base)
+    $pnlGenTiming = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlGenTiming.AutoSize = $true; $pnlGenTiming.FlowDirection = "LeftToRight"
+    $lblGenTiming = New-Object System.Windows.Forms.Label; $lblGenTiming.Text = "生成タイミング:"; $lblGenTiming.AutoSize = $true; $lblGenTiming.Margin = New-Object System.Windows.Forms.Padding(0, 4, 10, 0)
+    $radioGenScheduled = New-Object System.Windows.Forms.RadioButton; $radioGenScheduled.Text = "予定・期限起点"; $radioGenScheduled.AutoSize = $true; $radioGenScheduled.Checked = $true
+    $radioGenCompletion = New-Object System.Windows.Forms.RadioButton; $radioGenCompletion.Text = "完了起点"; $radioGenCompletion.AutoSize = $true
+    $pnlGenTiming.Controls.AddRange(@($lblGenTiming, $radioGenScheduled, $radioGenCompletion))
+    $genFlow.Controls.Add($pnlGenTiming)
+
+    # 3-2. 頻度 (Frequency)
+    $pnlFreq = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlFreq.AutoSize = $true; $pnlFreq.FlowDirection = "LeftToRight"; $pnlFreq.MinimumSize = New-Object System.Drawing.Size(560, 0)
+    $pnlFreq.Padding = New-Object System.Windows.Forms.Padding(10, 5, 0, 0)
+    $lblInterval = New-Object System.Windows.Forms.Label; $lblInterval.Text = "頻度:"; $lblInterval.AutoSize = $true; $lblInterval.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $cmbIntervalPreset = New-Object System.Windows.Forms.ComboBox; $cmbIntervalPreset.Width = 100; $cmbIntervalPreset.DropDownStyle = "DropDownList"
+    $cmbIntervalPreset.Items.AddRange(@("毎日", "毎週", "毎月 (同日)", "その他"))
+    $numInterval = New-Object System.Windows.Forms.NumericUpDown; $numInterval.Width = 50; $numInterval.Minimum = 1; $numInterval.Maximum = 365; $numInterval.Value = 1
+    $lblIntervalSuffix = New-Object System.Windows.Forms.Label; $lblIntervalSuffix.Text = "日ごと"; $lblIntervalSuffix.AutoSize = $true; $lblIntervalSuffix.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $pnlFreq.Controls.AddRange(@($lblInterval, $cmbIntervalPreset, $numInterval, $lblIntervalSuffix))
+    $genFlow.Controls.Add($pnlFreq)
+
+    # 3-3. 詳細頻度 (曜日/月末)
+    $pnlScheduleDetails = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlScheduleDetails.AutoSize = $true; $pnlScheduleDetails.FlowDirection = "LeftToRight"; $pnlScheduleDetails.Padding = New-Object System.Windows.Forms.Padding(10, 0, 0, 0)
+    $chkDays = @()
+    $days = @("月", "火", "水", "木", "金", "土", "日")
+    foreach ($d in $days) {
+        $c = New-Object System.Windows.Forms.CheckBox; $c.Text = $d; $c.AutoSize = $true; $c.Visible = $false
+        $pnlScheduleDetails.Controls.Add($c); $chkDays += $c
+    }
+    $chkEndOfMonth = New-Object System.Windows.Forms.CheckBox; $chkEndOfMonth.Text = "月末(最終日)を指定"; $chkEndOfMonth.AutoSize = $true; $chkEndOfMonth.Visible = $false
+    $pnlScheduleDetails.Controls.Add($chkEndOfMonth)
+    $genFlow.Controls.Add($pnlScheduleDetails)
+
+    # 3-4. 生成日の回避設定
+    $pnlGenAvoidance = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlGenAvoidance.AutoSize = $true; $pnlGenAvoidance.FlowDirection = "LeftToRight"; $pnlGenAvoidance.Padding = New-Object System.Windows.Forms.Padding(10, 0, 0, 0)
+    $lblGenWeekend = New-Object System.Windows.Forms.Label; $lblGenWeekend.Text = "土日回避:"; $lblGenWeekend.AutoSize = $true; $lblGenWeekend.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $cmbGenWeekendShift = New-Object System.Windows.Forms.ComboBox; $cmbGenWeekendShift.Width = 90; $cmbGenWeekendShift.DropDownStyle = "DropDownList"
+    $cmbGenWeekendShift.Items.AddRange(@("None", "Friday", "Monday")); $cmbGenWeekendShift.SelectedIndex = 0
+    $lblGenHoliday = New-Object System.Windows.Forms.Label; $lblGenHoliday.Text = "祝日回避:"; $lblGenHoliday.AutoSize = $true; $lblGenHoliday.Margin = New-Object System.Windows.Forms.Padding(10, 8, 0, 0)
+    $cmbGenHolidayShift = New-Object System.Windows.Forms.ComboBox; $cmbGenHolidayShift.Width = 90; $cmbGenHolidayShift.DropDownStyle = "DropDownList"
+    $cmbGenHolidayShift.Items.AddRange(@("None", "Before", "After")); $cmbGenHolidayShift.SelectedIndex = 0
+    $pnlGenAvoidance.Controls.AddRange(@($lblGenWeekend, $cmbGenWeekendShift, $lblGenHoliday, $cmbGenHolidayShift))
+    $genFlow.Controls.Add($pnlGenAvoidance)
+
+    # 3-5. 事前生成 (Scheduledのみ)
+    $pnlPreGen = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlPreGen.AutoSize = $true; $pnlPreGen.FlowDirection = "LeftToRight"; $pnlPreGen.Padding = New-Object System.Windows.Forms.Padding(10, 5, 0, 0)
+    $chkTriggerPreGen = New-Object System.Windows.Forms.CheckBox; $chkTriggerPreGen.Text = "事前生成を行う"; $chkTriggerPreGen.AutoSize = $true; $chkTriggerPreGen.Margin = New-Object System.Windows.Forms.Padding(0, 3, 0, 0)
+    $numPreGen = New-Object System.Windows.Forms.NumericUpDown; $numPreGen.Width = 50; $numPreGen.Minimum = 0; $numPreGen.Maximum = 365; $numPreGen.Enabled = $false
+    $lblPreGenSuffix = New-Object System.Windows.Forms.Label; $lblPreGenSuffix.Text = "日前"; $lblPreGenSuffix.AutoSize = $true; $lblPreGenSuffix.Margin = New-Object System.Windows.Forms.Padding(0, 3, 0, 0)
+    $pnlPreGen.Controls.AddRange(@($chkTriggerPreGen, $numPreGen, $lblPreGenSuffix))
+    $genFlow.Controls.Add($pnlPreGen)
+
+    $mainFlow.Controls.Add($grpGenSettings)
+
+    # =================================================================
+    # 4. 期日設定 (Due Date Settings) - タスク/プロジェクト用
+    # =================================================================
+    $grpDueSettings = New-Object System.Windows.Forms.GroupBox
+    $grpDueSettings.Text = "期日設定"
+    $grpDueSettings.AutoSize = $true
+    $grpDueSettings.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $grpDueSettings.MinimumSize = New-Object System.Drawing.Size(580, 0)
+    $grpDueSettings.Padding = New-Object System.Windows.Forms.Padding(5)
+
+    $dueFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $dueFlow.Dock = "Fill"
+    $dueFlow.FlowDirection = "TopDown"
+    $dueFlow.AutoSize = $true
+    $dueFlow.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $dueFlow.WrapContents = $false
+    $grpDueSettings.Controls.Add($dueFlow)
+
+    # 4-1. 期日オフセット
+    $pnlDueOffset = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlDueOffset.AutoSize = $true; $pnlDueOffset.FlowDirection = "LeftToRight"
+    $lblDueBase = New-Object System.Windows.Forms.Label; $lblDueBase.Text = "基準: 生成日"; $lblDueBase.AutoSize = $true; $lblDueBase.Margin = New-Object System.Windows.Forms.Padding(0, 8, 10, 0)
+    $lblDueOffset = New-Object System.Windows.Forms.Label; $lblDueOffset.Text = "間隔 (頻度):"; $lblDueOffset.AutoSize = $true; $lblDueOffset.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $lblDueOffset = New-Object System.Windows.Forms.Label; $lblDueOffset.Text = "間隔:"; $lblDueOffset.AutoSize = $true; $lblDueOffset.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $numDueOffset = New-Object System.Windows.Forms.NumericUpDown; $numDueOffset.Width = 60; $numDueOffset.Minimum = 0
+    $lblDueSuffix = New-Object System.Windows.Forms.Label; $lblDueSuffix.Text = "日後"; $lblDueSuffix.AutoSize = $true; $lblDueSuffix.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $pnlDueOffset.Controls.AddRange(@($lblDueBase, $lblDueOffset, $numDueOffset, $lblDueSuffix))
+    $cmbDueOffsetUnit = New-Object System.Windows.Forms.ComboBox; $cmbDueOffsetUnit.Width = 80; $cmbDueOffsetUnit.DropDownStyle = "DropDownList"
+    $cmbDueOffsetUnit.Items.AddRange(@("日後", "週間後", "ヶ月後")); $cmbDueOffsetUnit.SelectedIndex = 0
+    $pnlDueOffset.Controls.AddRange(@($lblDueBase, $lblDueOffset, $numDueOffset, $cmbDueOffsetUnit))
+    $dueFlow.Controls.Add($pnlDueOffset)
+
+    # 4-2. 期日の回避設定
+    $pnlDueAvoidance = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlDueAvoidance.AutoSize = $true; $pnlDueAvoidance.FlowDirection = "LeftToRight"
+    $lblDueWeekend = New-Object System.Windows.Forms.Label; $lblDueWeekend.Text = "期日の土日回避:"; $lblDueWeekend.AutoSize = $true; $lblDueWeekend.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $cmbDueWeekendShift = New-Object System.Windows.Forms.ComboBox; $cmbDueWeekendShift.Width = 90; $cmbDueWeekendShift.DropDownStyle = "DropDownList"
+    $cmbDueWeekendShift.Items.AddRange(@("None", "Friday", "Monday")); $cmbDueWeekendShift.SelectedIndex = 0
+    $lblDueHoliday = New-Object System.Windows.Forms.Label; $lblDueHoliday.Text = "期日の祝日回避:"; $lblDueHoliday.AutoSize = $true; $lblDueHoliday.Margin = New-Object System.Windows.Forms.Padding(10, 8, 0, 0)
+    $cmbDueHolidayShift = New-Object System.Windows.Forms.ComboBox; $cmbDueHolidayShift.Width = 90; $cmbDueHolidayShift.DropDownStyle = "DropDownList"
+    $cmbDueHolidayShift.Items.AddRange(@("None", "Before", "After")); $cmbDueHolidayShift.SelectedIndex = 0
+    $pnlDueAvoidance.Controls.AddRange(@($lblDueWeekend, $cmbDueWeekendShift, $lblDueHoliday, $cmbDueHolidayShift))
+    $dueFlow.Controls.Add($pnlDueAvoidance)
+
+    $mainFlow.Controls.Add($grpDueSettings)
+
+    # =================================================================
+    # 5. アイテム詳細設定セクション
+    # =================================================================
+    $grpDetails = New-Object System.Windows.Forms.GroupBox
+    $grpDetails.Text = "アイテム詳細設定"
+    $grpDetails.AutoSize = $true
+    $grpDetails.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $grpDetails.MinimumSize = New-Object System.Drawing.Size(580, 0)
+    $grpDetails.Padding = New-Object System.Windows.Forms.Padding(5)
+
+    $detailsFlow = New-Object System.Windows.Forms.FlowLayoutPanel
+    $detailsFlow.Dock = "Fill"
+    $detailsFlow.FlowDirection = "TopDown"
+    $detailsFlow.AutoSize = $true
+    $detailsFlow.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $detailsFlow.WrapContents = $false
+    $grpDetails.Controls.Add($detailsFlow)
+
+    # 5-1. プロジェクト選択 (Row 1)
+    $pnlTaskRow1 = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlTaskRow1.AutoSize = $true; $pnlTaskRow1.FlowDirection = "LeftToRight"
+    $lblTaskProj = New-Object System.Windows.Forms.Label; $lblTaskProj.Text = "プロジェクト:"; $lblTaskProj.AutoSize = $true; $lblTaskProj.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $cmbTaskProj = New-Object System.Windows.Forms.ComboBox; $cmbTaskProj.Width = 300; $cmbTaskProj.DropDownStyle = "DropDownList"
+    $cmbTaskProj.DisplayMember = 'ProjectName'; $cmbTaskProj.ValueMember = 'ProjectID'
+    $script:Projects | Sort-Object ProjectName | ForEach-Object { $cmbTaskProj.Items.Add($_) } | Out-Null
+    $pnlTaskRow1.Controls.AddRange(@($lblTaskProj, $cmbTaskProj))
+    $detailsFlow.Controls.Add($pnlTaskRow1)
+
+    # 5-2. タスク名 (Row 2)
+    $pnlTaskRow2 = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlTaskRow2.AutoSize = $true; $pnlTaskRow2.FlowDirection = "LeftToRight"
+    $lblTaskContent = New-Object System.Windows.Forms.Label; $lblTaskContent.Text = "タスク名:   "; $lblTaskContent.AutoSize = $true; $lblTaskContent.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $txtTaskContent = New-Object System.Windows.Forms.TextBox; $txtTaskContent.Width = 450; $txtTaskContent.Height = 25 # Single line height
+    $pnlTaskRow2.Controls.AddRange(@($lblTaskContent, $txtTaskContent))
+    $detailsFlow.Controls.Add($pnlTaskRow2)
+
+    # 5-3. カテゴリ・サブカテゴリ (Row 3)
+    $pnlTaskRow3 = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlTaskRow3.AutoSize = $true; $pnlTaskRow3.FlowDirection = "LeftToRight"
+    $lblTaskCat = New-Object System.Windows.Forms.Label; $lblTaskCat.Text = "カテゴリ:   "; $lblTaskCat.AutoSize = $true; $lblTaskCat.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $cmbTaskCat = New-Object System.Windows.Forms.ComboBox; $cmbTaskCat.Width = 120; $cmbTaskCat.DropDownStyle = "DropDownList"
+    $cmbTaskCat.Items.AddRange($script:Categories.PSObject.Properties.Name)
+    
+    $lblTaskSubCat = New-Object System.Windows.Forms.Label; $lblTaskSubCat.Text = "サブカテゴリ:"; $lblTaskSubCat.AutoSize = $true; $lblTaskSubCat.Margin = New-Object System.Windows.Forms.Padding(10, 8, 0, 0)
+    $cmbTaskSubCat = New-Object System.Windows.Forms.ComboBox; $cmbTaskSubCat.Width = 120; $cmbTaskSubCat.DropDownStyle = "DropDownList"
+    $pnlTaskRow3.Controls.AddRange(@($lblTaskCat, $cmbTaskCat, $lblTaskSubCat, $cmbTaskSubCat))
+    $detailsFlow.Controls.Add($pnlTaskRow3)
+
+    # 5-4. 優先度・進捗・通知 (Row 4)
+    $pnlTaskRow4 = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlTaskRow4.AutoSize = $true; $pnlTaskRow4.FlowDirection = "LeftToRight"
+    $lblTaskPrio = New-Object System.Windows.Forms.Label; $lblTaskPrio.Text = "優先度:     "; $lblTaskPrio.AutoSize = $true; $lblTaskPrio.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $cmbTaskPrio = New-Object System.Windows.Forms.ComboBox; $cmbTaskPrio.Width = 60; $cmbTaskPrio.DropDownStyle = "DropDownList"
+    $cmbTaskPrio.Items.AddRange(@("高", "中", "低")); $cmbTaskPrio.SelectedIndex = 1
+    
+    $lblTaskStatus = New-Object System.Windows.Forms.Label; $lblTaskStatus.Text = "進捗:"; $lblTaskStatus.AutoSize = $true; $lblTaskStatus.Margin = New-Object System.Windows.Forms.Padding(10, 8, 0, 0)
+    $cmbTaskStatus = New-Object System.Windows.Forms.ComboBox; $cmbTaskStatus.Width = 80; $cmbTaskStatus.DropDownStyle = "DropDownList"
+    $cmbTaskStatus.Items.AddRange($script:TaskStatuses); $cmbTaskStatus.SelectedIndex = 0
+
+    $lblTaskNotify = New-Object System.Windows.Forms.Label; $lblTaskNotify.Text = "通知:"; $lblTaskNotify.AutoSize = $true; $lblTaskNotify.Margin = New-Object System.Windows.Forms.Padding(10, 8, 0, 0)
+    $cmbTaskNotify = New-Object System.Windows.Forms.ComboBox; $cmbTaskNotify.Width = 100; $cmbTaskNotify.DropDownStyle = "DropDownList"
+    $cmbTaskNotify.Items.AddRange(@("全体設定に従う","通知しない","当日","1日前","前の営業日","3日前","1週間前")); $cmbTaskNotify.SelectedIndex = 0
+    $pnlTaskRow4.Controls.AddRange(@($lblTaskPrio, $cmbTaskPrio, $lblTaskStatus, $cmbTaskStatus, $lblTaskNotify, $cmbTaskNotify))
+    $detailsFlow.Controls.Add($pnlTaskRow4)
+    
+    # 4-1-B. プロジェクト用詳細 (コピー元)
+    $pnlProjDetails = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlProjDetails.AutoSize = $true; $pnlProjDetails.FlowDirection = "LeftToRight"; $pnlProjDetails.Visible = $false
+    $lblSourceProj = New-Object System.Windows.Forms.Label; $lblSourceProj.Text = "コピー元プロジェクト(任意):"; $lblSourceProj.AutoSize = $true; $lblSourceProj.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $cmbSourceProj = New-Object System.Windows.Forms.ComboBox; $cmbSourceProj.Width = 250; $cmbSourceProj.DropDownStyle = "DropDownList"
+    $cmbSourceProj.Items.Add("(なし)"); $script:Projects | Sort-Object ProjectName | ForEach-Object { $cmbSourceProj.Items.Add($_) } | Out-Null; $cmbSourceProj.SelectedIndex = 0
+    $pnlProjDetails.Controls.AddRange(@($lblSourceProj, $cmbSourceProj))
+    $detailsFlow.Controls.Add($pnlProjDetails)
+
+    # 4-X. イベント時間設定 (詳細グループ内へ移動)
+    $pnlTime = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlTime.AutoSize = $true; $pnlTime.FlowDirection = "LeftToRight"; $pnlTime.Visible = $false
+    $chkEventAllDay = New-Object System.Windows.Forms.CheckBox; $chkEventAllDay.Text = "終日"; $chkEventAllDay.AutoSize = $true; $chkEventAllDay.Margin = New-Object System.Windows.Forms.Padding(0, 8, 10, 0)
+    $dtpEventStart = New-Object System.Windows.Forms.DateTimePicker; $dtpEventStart.Format = 'Custom'; $dtpEventStart.CustomFormat = "HH:mm"; $dtpEventStart.ShowUpDown = $true; $dtpEventStart.Width = 70
+    $lblEventSep = New-Object System.Windows.Forms.Label; $lblEventSep.Text = "～"; $lblEventSep.AutoSize = $true; $lblEventSep.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
+    $dtpEventEnd = New-Object System.Windows.Forms.DateTimePicker; $dtpEventEnd.Format = 'Custom'; $dtpEventEnd.CustomFormat = "HH:mm"; $dtpEventEnd.ShowUpDown = $true; $dtpEventEnd.Width = 70
+    $pnlTime.Controls.AddRange(@($chkEventAllDay, $dtpEventStart, $lblEventSep, $dtpEventEnd))
+    $detailsFlow.Controls.Add($pnlTime)
+
+    # 4-3. プロジェクト警告
+    $lblProjWarning = New-Object System.Windows.Forms.Label; $lblProjWarning.Text = "⚠️ テンプレート複製モード: 完了時、プロジェクト内の全タスクが複製されます"; $lblProjWarning.AutoSize = $true; $lblProjWarning.ForeColor = [System.Drawing.Color]::DarkOrange; $lblProjWarning.Visible = $false
+    $detailsFlow.Controls.Add($lblProjWarning)
+
+    $mainFlow.Controls.Add($grpDetails)
+
+    # =================================================================
+    # 5. プレビューセクション
+    # =================================================================
+    $grpPreview = New-Object System.Windows.Forms.GroupBox
+    $grpPreview.Text = "次回予定プレビュー"
+    $grpPreview.Size = New-Object System.Drawing.Size(580, 60)
+    $lblPreview = New-Object System.Windows.Forms.Label; $lblPreview.Text = "計算中..."; $lblPreview.AutoSize = $true; $lblPreview.Location = "15, 25"; $lblPreview.Font = New-Object System.Drawing.Font("Meiryo UI", 9, [System.Drawing.FontStyle]::Bold)
+    $grpPreview.Controls.Add($lblPreview)
+    $mainFlow.Controls.Add($grpPreview)
+    $mainFlow.SetFlowBreak($grpPreview, $true)
+    
+    # =================================================================
+    # 6. アクションボタン
+    # =================================================================
+    $pnlActions = New-Object System.Windows.Forms.FlowLayoutPanel; $pnlActions.AutoSize = $true; $pnlActions.FlowDirection = "LeftToRight"; $pnlActions.Padding = New-Object System.Windows.Forms.Padding(0, 10, 0, 0)
+    $btnSave = New-Object System.Windows.Forms.Button; $btnSave.Text = "保存"; $btnSave.Size = "100, 35"
+    $btnDelete = New-Object System.Windows.Forms.Button; $btnDelete.Text = "削除"; $btnDelete.Size = "100, 35"; $btnDelete.ForeColor = [System.Drawing.Color]::Red
+    $btnClose = New-Object System.Windows.Forms.Button; $btnClose.Text = "閉じる"; $btnClose.Size = "100, 35"; $btnClose.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $pnlActions.Margin = New-Object System.Windows.Forms.Padding(0, 15, 0, 15)
+    $pnlActions.Controls.AddRange(@($btnSave, $btnDelete, $btnClose))
+    $mainFlow.Controls.Add($pnlActions)
+
+    # --- ロジック実装 ---
+
+    # プレビュー計算ロジック
+    $CalculatePreview = {
+        $baseDate = if ($dtpNextRun.Value) { $dtpNextRun.Value.Date } else { (Get-Date).Date }
+        $freq = $cmbIntervalPreset.SelectedItem
+        $interval = [int]$numInterval.Value
+        $unit = if ($freq -eq "毎月 (同日)") { "Month" } else { "Day" }
+        $wShift = $cmbGenWeekendShift.SelectedItem
+        $hShift = $cmbGenHolidayShift.SelectedItem
+        
+        $params = @{}
+        if ($freq -eq "毎週") {
+            $selectedDays = @(); for ($i=0; $i -lt 7; $i++) { if ($chkDays[$i].Checked) { $selectedDays += $days[$i] } }
+            $params["Days"] = $selectedDays
+        } elseif ($freq -eq "毎月 (同日)") {
+            $params["IsEndOfMonth"] = $chkEndOfMonth.Checked
+            $params["Day"] = $baseDate.Day
+        }
+
+        # 補正ロジックのみ再利用 (Get-NextRecurringDateの一部ロジック相当)
+        $calcResult = Get-NextRecurringDate -BaseDate $baseDate -Frequency $freq -Params $params -WeekendShift $wShift -HolidayShift $hShift -IntervalDays $interval -IntervalUnit $unit
+        
+        $actualDate = $calcResult.ActualDate
+        $isAdj = $calcResult.IsAdjusted
+
+        $previewText = "次回生成: $($actualDate.ToString('yyyy/MM/dd (ddd)'))"
+        $foreColor = [System.Drawing.Color]::Black
+
+        if ($radioTask.Checked -or $radioProject.Checked) {
+            $dueOffset = [int]$numDueOffset.Value
+            $dueUnit = $cmbDueOffsetUnit.SelectedItem
+            
+            # 期日の回避設定を適用
+            $dueWShift = $cmbDueWeekendShift.SelectedItem
+            $dueHShift = $cmbDueHolidayShift.SelectedItem
+            $holidays = Get-Holidays
+            
+            $tempDueDate = $actualDate.AddDays($dueOffset)
+            $tempDueDate = $actualDate
+            switch ($dueUnit) {
+                "日後"   { $tempDueDate = $actualDate.AddDays($dueOffset) }
+                "週間後" { $tempDueDate = $actualDate.AddDays($dueOffset * 7) }
+                "ヶ月後" { $tempDueDate = $actualDate.AddMonths($dueOffset) }
+                default  { $tempDueDate = $actualDate.AddDays($dueOffset) }
+            }
+            
+            # 期日補正ロジック (簡易版)
+            $loop = 0
+            while ($loop -lt 30) {
+                $loop++
+                $dStr = $tempDueDate.ToString("yyyy-MM-dd")
+                $isHol = $holidays.ContainsKey($dStr)
+                $dow = $tempDueDate.DayOfWeek
+                $isWe = ($dow -eq [DayOfWeek]::Saturday -or $dow -eq [DayOfWeek]::Sunday)
+                if (-not $isHol -and -not $isWe) { break }
+                
+                $shifted = $false
+                if ($isHol) {
+                    if ($dueHShift -eq "Before") { $tempDueDate = $tempDueDate.AddDays(-1); $shifted = $true }
+                    elseif ($dueHShift -eq "After") { $tempDueDate = $tempDueDate.AddDays(1); $shifted = $true }
+                }
+                if (-not $shifted -and $isWe) {
+                    if ($dueWShift -eq "Friday") {
+                        if ($dow -eq [DayOfWeek]::Saturday) { $tempDueDate = $tempDueDate.AddDays(-1) }
+                        elseif ($dow -eq [DayOfWeek]::Sunday) { $tempDueDate = $tempDueDate.AddDays(-2) }
+                        $shifted = $true
+                    } elseif ($dueWShift -eq "Monday") {
+                        if ($dow -eq [DayOfWeek]::Saturday) { $tempDueDate = $tempDueDate.AddDays(2) }
+                        elseif ($dow -eq [DayOfWeek]::Sunday) { $tempDueDate = $tempDueDate.AddDays(1) }
+                        $shifted = $true
+                    }
+                }
+                if (-not $shifted) { break }
+            }
+            $itemDueDate = $tempDueDate
+            
+            $previewText += " ｜ アイテム期日: $($itemDueDate.ToString('yyyy/MM/dd (ddd)'))"
+        } elseif ($radioEvent.Checked) {
+            $startT = $dtpEventStart.Value.ToString("HH:mm")
+            $endT = $dtpEventEnd.Value.ToString("HH:mm")
+            $previewText += " ｜ 時間: $startT - $endT"
+        }
+
+        if ($isAdj) { $previewText += " (月末補正あり)"; $foreColor = [System.Drawing.Color]::DarkBlue }
+        if ($actualDate.Date -lt (Get-Date).Date) { 
+            $previewText += " (過去日 - 次回起動時に再計算)"; 
+            $foreColor = [System.Drawing.Color]::DimGray 
+        }
+
+        $lblPreview.Text = $previewText
+        $lblPreview.ForeColor = $foreColor
+    }
+
+    # UI状態更新ロジック
+    $UpdateUIState = {
+        $isTask = $radioTask.Checked
+        $isProject = $radioProject.Checked
+        $isEvent = $radioEvent.Checked
+
+        # トリガー表示制御
+        if ($radioGenScheduled.Checked) {
+            $pnlPreGen.Visible = $true
+            $numPreGen.Enabled = $chkTriggerPreGen.Checked
+        } else {
+            $pnlPreGen.Visible = $false
+        }
+
+        # イベント固有制御
+        if ($isEvent) {
+            $radioGenScheduled.Checked = $true
+            $pnlGenTiming.Enabled = $false # イベントは登録起点(生成起点)固定
+            $pnlGenTiming.Visible = $false # イベントは登録起点(生成起点)固定のため非表示(詰め)
+            $grpDueSettings.Visible = $false # イベントに期日設定はない
+        } else {
+            $pnlGenTiming.Enabled = $true
+            $pnlGenTiming.Visible = $true
+            $grpDueSettings.Visible = $true
+        }
+        
+        $pnlGenAvoidance.Visible = $true
+
+        # 頻度オプション制御
+        $freq = $cmbIntervalPreset.SelectedItem
+        $isCustom = ($freq -eq "その他")
+        $numInterval.Visible = $isCustom
+        $lblIntervalSuffix.Visible = $isCustom
+
+        foreach ($c in $chkDays) { $c.Visible = ($freq -eq "毎週") }
+        $chkEndOfMonth.Visible = ($freq -eq "毎月 (同日)")
+        $numInterval.Enabled = $isCustom
+        if ($freq -eq "毎日") { $numInterval.Value = 1 }
+        if ($freq -eq "毎週") { $numInterval.Value = 7 }
+        if ($freq -eq "毎月 (同日)") { $numInterval.Value = 1 }
+
+        # 詳細設定制御
+        $grpDetails.Visible = $true
+        $pnlTaskRow1.Visible = $isTask
+        $pnlTaskRow2.Visible = $isTask
+        $pnlTaskRow3.Visible = $isTask
+        $pnlTaskRow4.Visible = $isTask
+        $pnlProjDetails.Visible = $isProject
+        $pnlTime.Visible = $isEvent
+        $lblProjWarning.Visible = $isProject
+        
+        # 再計算
+        & $CalculatePreview
+    }
+
+    # イベントハンドラ登録
+    $radioTask.Add_CheckedChanged($UpdateUIState)
+    $radioProject.Add_CheckedChanged($UpdateUIState)
+    $radioEvent.Add_CheckedChanged($UpdateUIState)
+    
+    $radioGenScheduled.Add_CheckedChanged($UpdateUIState)
+    $radioGenCompletion.Add_CheckedChanged($UpdateUIState)
+    $chkTriggerPreGen.Add_CheckedChanged($UpdateUIState)
+    
+    $cmbIntervalPreset.Add_SelectedIndexChanged($UpdateUIState)
+    $numInterval.Add_ValueChanged($CalculatePreview)
+    $dtpNextRun.Add_ValueChanged($CalculatePreview)
+    $numDueOffset.Add_ValueChanged($CalculatePreview)
+    $cmbDueOffsetUnit.Add_SelectedIndexChanged($CalculatePreview)
+    $cmbGenWeekendShift.Add_SelectedIndexChanged($CalculatePreview)
+    $cmbGenHolidayShift.Add_SelectedIndexChanged($CalculatePreview)
+    $cmbDueWeekendShift.Add_SelectedIndexChanged($CalculatePreview)
+    $cmbDueHolidayShift.Add_SelectedIndexChanged($CalculatePreview)
+    foreach ($c in $chkDays) { $c.Add_CheckedChanged($CalculatePreview) }
+    $chkEndOfMonth.Add_CheckedChanged($CalculatePreview)
+    $chkEventAllDay.Add_CheckedChanged({ $dtpEventStart.Enabled = -not $chkEventAllDay.Checked; $dtpEventEnd.Enabled = -not $chkEventAllDay.Checked; & $CalculatePreview })
+    $dtpEventStart.Add_ValueChanged($CalculatePreview)
+    $dtpEventEnd.Add_ValueChanged($CalculatePreview)
+    
+    $cmbTaskCat.Add_SelectedIndexChanged({
+        $cmbTaskSubCat.Items.Clear()
+        $cat = $cmbTaskCat.SelectedItem
+        if ($cat -and $script:Categories.$cat) {
+            $cmbTaskSubCat.Items.AddRange($script:Categories.$cat.PSObject.Properties.Name)
+        }
+    })
+
+    # データロード
+    $loadRules = {
+        $dgv.Rows.Clear()
+        $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+        if ($rules) {
+            if ($rules -isnot [array]) { $rules = @($rules) }
+            foreach ($rule in $rules) {
+                $type = if ($rule.Type) { $rule.Type } else { "Task" }
+                $interval = if ($rule.IntervalDays) { "$($rule.IntervalDays) $($rule.IntervalUnit)" } else { $rule.Frequency }
+                
+                $nextGenStr = "-"
+                $nextDueStr = "-"
+                if ($rule.NextRunDate) {
+                    $genDate = [datetime]$rule.NextRunDate
+                    $nextGenStr = $genDate.ToString('yyyy/MM/dd')
+                    
+                    $dueOffset = if ($rule.Params -and $rule.Params.DueOffset) { [int]$rule.Params.DueOffset } else { 0 }
+                    $dueUnit = if ($rule.Params -and $rule.Params.DueOffsetUnit) { $rule.Params.DueOffsetUnit } else { "日後" }
+                    $dueWShift = if ($rule.Params -and $rule.Params.DueWeekendShift) { $rule.Params.DueWeekendShift } else { "None" }
+                    $dueHShift = if ($rule.Params -and $rule.Params.DueHolidayShift) { $rule.Params.DueHolidayShift } else { "None" }
+
+                    $dueDate = $genDate
+                    switch ($dueUnit) {
+                        "日後"   { $dueDate = $genDate.AddDays($dueOffset) }
+                        "週間後" { $dueDate = $genDate.AddDays($dueOffset * 7) }
+                        "ヶ月後" { $dueDate = $genDate.AddMonths($dueOffset) }
+                        default  { $dueDate = $genDate.AddDays($dueOffset) }
+                    }
+
+                    # 休日・週末補正の適用 (簡易計算)
+                    $holidays = Get-Holidays
+                    for ($k = 0; $k -lt 30; $k++) {
+                        $dStr = $dueDate.ToString("yyyy-MM-dd")
+                        $isHol = $holidays.ContainsKey($dStr)
+                        $dow = $dueDate.DayOfWeek
+                        $isWe = ($dow -eq [DayOfWeek]::Saturday -or $dow -eq [DayOfWeek]::Sunday)
+                        if (-not $isHol -and -not $isWe) { break }
+                        
+                        $shifted = $false
+                        if ($isHol) {
+                            if ($dueHShift -eq "Before") { $dueDate = $dueDate.AddDays(-1); $shifted = $true }
+                            elseif ($dueHShift -eq "After") { $dueDate = $dueDate.AddDays(1); $shifted = $true }
+                        }
+                        if (-not $shifted -and $isWe) {
+                            if ($dueWShift -eq "Friday") {
+                                if ($dow -eq [DayOfWeek]::Saturday) { $dueDate = $dueDate.AddDays(-1) }
+                                elseif ($dow -eq [DayOfWeek]::Sunday) { $dueDate = $dueDate.AddDays(-2) }
+                                $shifted = $true
+                            } elseif ($dueWShift -eq "Monday") {
+                                if ($dow -eq [DayOfWeek]::Saturday) { $dueDate = $dueDate.AddDays(2) }
+                                elseif ($dow -eq [DayOfWeek]::Sunday) { $dueDate = $dueDate.AddDays(1) }
+                                $shifted = $true
+                            }
+                        }
+                        if (-not $shifted) { break }
+                    }
+
+                    $nextDueStr = $dueDate.ToString('yyyy/MM/dd')
+                }
+                
+                $isActive = if ($rule.PSObject.Properties['IsActive']) { $rule.IsActive } else { $true }
+                $dgv.Rows.Add($isActive, $rule.RuleID, $type, $rule.TaskName, $interval, $nextGenStr, $nextDueStr) | Out-Null
+            }
+        }
+    }
+
+    $dgv.Add_CellContentClick({ param($s, $e) if ($e.RowIndex -ge 0 -and $dgv.Columns[$e.ColumnIndex].Name -eq "IsActive") { $dgv.CommitEdit([System.Windows.Forms.DataGridViewDataErrorContexts]::Commit) } })
+    $dgv.Add_CellValueChanged({
+
+        param($s, $e)
+        if ($e.RowIndex -ge 0 -and $dgv.Columns[$e.ColumnIndex].Name -eq "IsActive") {
+            $row = $dgv.Rows[$e.RowIndex]
+            $ruleId = $row.Cells["RuleID"].Value
+            $isActive = $row.Cells["IsActive"].Value
+            $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+            if ($rules -isnot [array]) { $rules = @($rules) }
+            $targetRule = $rules | Where-Object { $_.RuleID -eq $ruleId } | Select-Object -First 1
+            if ($targetRule) {
+                $targetRule.IsActive = $isActive
+                Save-DataFile -filePath $script:RecurringRulesFile -dataObject $rules
+                if ($txtTitle.Text -eq $targetRule.TaskName) { $chkIsActive.Checked = $isActive }
+            }
+        }
+    })
+
+    $dgv.Add_SelectionChanged({
+        if ($dgv.SelectedRows.Count -gt 0) {
+            $id = $dgv.SelectedRows[0].Cells["RuleID"].Value
+            $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+            if ($rules -isnot [array]) { $rules = @($rules) }
+            $rule = $rules | Where-Object { $_.RuleID -eq $id } | Select-Object -First 1
+            
+            if ($rule) {
+                # 基本
+                $txtTitle.Text = $rule.TaskName
+                $chkIsActive.Checked = if ($rule.PSObject.Properties['IsActive']) { $rule.IsActive } else { $true }
+                
+                # 種別
+                $type = if ($rule.Type) { $rule.Type } else { "Task" }
+                switch ($type) { "Task" { $radioTask.Checked=$true } "Project" { $radioProject.Checked=$true } "Event" { $radioEvent.Checked=$true } }
+                
+                # トリガー
+                $triggers = if ($rule.TriggerModes) { $rule.TriggerModes } else { @() }
+                if ($triggers -contains "OnCompletion") { $radioGenCompletion.Checked = $true } else { $radioGenScheduled.Checked = $true }
+                $chkTriggerPreGen.Checked = ($triggers -contains "PreGeneration")
+                $numPreGen.Value = if ($rule.PreGenDays) { [int]$rule.PreGenDays } else { 0 }
+                
+                # 起点 (Calculation Base)
+                if ($rule.CalculationBase -eq "Completion") { $radioGenCompletion.Checked = $true } else { $radioGenScheduled.Checked = $true }
+
+                # スケジュール
+                $cmbIntervalPreset.SelectedItem = $rule.Frequency
+                $numInterval.Value = if ($rule.IntervalDays) { [int]$rule.IntervalDays } else { 1 }
+                $cmbGenWeekendShift.SelectedItem = if ($rule.WeekendShift) { $rule.WeekendShift } else { "None" }
+                $cmbGenHolidayShift.SelectedItem = if ($rule.HolidayShift) { $rule.HolidayShift } else { "None" }
+                if ($rule.NextRunDate) { try { $dtpNextRun.Value = [datetime]$rule.NextRunDate } catch {} }
+                
+                if ($rule.Params -and $rule.Params.Days) { for ($i=0; $i -lt 7; $i++) { $chkDays[$i].Checked = ($rule.Params.Days -contains $days[$i]) } }
+                if ($rule.Params -and $rule.Params.IsEndOfMonth) { $chkEndOfMonth.Checked = $rule.Params.IsEndOfMonth }
+                
+                # 詳細
+                
+                if ($type -eq "Task" -and $rule.BaseTask) {
+                    $proj = $cmbTaskProj.Items | Where-Object { $_.ProjectID -eq $rule.BaseTask.ProjectID } | Select-Object -First 1
+                    if ($proj) { $cmbTaskProj.SelectedItem = $proj }
+                    $cmbTaskCat.SelectedItem = $rule.BaseTask.カテゴリ
+                    $cmbTaskPrio.SelectedItem = $rule.BaseTask.優先度
+                    $cmbTaskStatus.SelectedItem = if ($rule.BaseTask.進捗度) { $rule.BaseTask.進捗度 } else { "未実施" }
+                    $cmbTaskNotify.SelectedItem = if ($rule.BaseTask.通知設定) { $rule.BaseTask.通知設定 } else { "全体設定に従う" }
+                    $cmbTaskSubCat.SelectedItem = $rule.BaseTask.サブカテゴリ
+                    $txtTaskContent.Text = $rule.BaseTask.タスク内容
+                } elseif ($type -eq "Project") {
+                    if ($rule.Params -and $rule.Params.SourceProjectID) {
+                        $src = $cmbSourceProj.Items | Where-Object { $_.ProjectID -eq $rule.Params.SourceProjectID } | Select-Object -First 1
+                        if ($src) { $cmbSourceProj.SelectedItem = $src }
+                    }
+                } elseif ($type -eq "Event" -and $rule.Params) {
+                    $chkEventAllDay.Checked = $rule.Params.IsAllDay
+                    if ($rule.Params.StartTime) { try { $dtpEventStart.Value = [datetime]$rule.Params.StartTime } catch {} }
+                    if ($rule.Params.EndTime) { try { $dtpEventEnd.Value = [datetime]$rule.Params.EndTime } catch {} }
+                }
+                
+                # 期日設定
+                $numDueOffset.Value = if ($rule.Params -and $rule.Params.DueOffset) { [int]$rule.Params.DueOffset } else { 0 }
+                $unit = if ($rule.Params -and $rule.Params.DueOffsetUnit) { $rule.Params.DueOffsetUnit } else { "日後" }
+                if ($cmbDueOffsetUnit.Items.Contains($unit)) { $cmbDueOffsetUnit.SelectedItem = $unit } else { $cmbDueOffsetUnit.SelectedIndex = 0 }
+                $cmbDueWeekendShift.SelectedItem = if ($rule.Params -and $rule.Params.DueWeekendShift) { $rule.Params.DueWeekendShift } else { "None" }
+                $cmbDueHolidayShift.SelectedItem = if ($rule.Params -and $rule.Params.DueHolidayShift) { $rule.Params.DueHolidayShift } else { "None" }
+                
+                & $UpdateUIState
+            }
+        }
+    })
+
+    # 初期化
+    $cmbIntervalPreset.SelectedIndex = 0
+    & $loadRules
+    
+    # 初期パラメータ処理
+    if ($initialRuleId) {
+        foreach ($row in $dgv.Rows) { if ($row.Cells["RuleID"].Value -eq $initialRuleId) { $row.Selected = $true; break } }
+    } elseif ($initialItem) {
+        $dgv.ClearSelection()
+        $txtTitle.Text = if ($initialType -eq "Project") { $initialItem.ProjectName } elseif ($initialType -eq "Event") { $initialItem.Title } else { $initialItem.タスク }
+        switch ($initialType) { "Task" { $radioTask.Checked=$true } "Project" { $radioProject.Checked=$true } "Event" { $radioEvent.Checked=$true } }
+        & $UpdateUIState
+    }
+
+    # 保存処理
+    $btnSave.Add_Click({
+        if ([string]::IsNullOrWhiteSpace($txtTitle.Text)) { [System.Windows.Forms.MessageBox]::Show("タイトルを入力してください。", "エラー", "OK", "Error"); return }
+        
+        $type = if ($radioTask.Checked) { "Task" } elseif ($radioProject.Checked) { "Project" } else { "Event" }
+        
+        $triggers = @()
+        if ($radioGenCompletion.Checked) { $triggers += "OnCompletion" }
+        if ($radioGenScheduled.Checked) { $triggers += "OnExpiration" }
+        if ($radioGenScheduled.Checked -and $chkTriggerPreGen.Checked) { $triggers += "PreGeneration" }
+        
+        $calcBase = if ($radioGenCompletion.Checked) { "Completion" } else { "Generation" }
+        
+        $unit = if ($cmbIntervalPreset.SelectedItem -eq "毎月 (同日)") { "Month" } else { "Day" }
+        $ruleParams = @{}
+        
+        if ($cmbIntervalPreset.SelectedItem -eq "毎週") {
+            $selectedDays = @(); for ($i=0; $i -lt 7; $i++) { if ($chkDays[$i].Checked) { $selectedDays += $days[$i] } }
+            $ruleParams["Days"] = $selectedDays
+        } elseif ($cmbIntervalPreset.SelectedItem -eq "毎月 (同日)") {
+            $ruleParams["IsEndOfMonth"] = $chkEndOfMonth.Checked
+        }
+
+        # 期日設定 (タスク/プロジェクトのみ)
+        $ruleParams["DueOffset"] = $numDueOffset.Value
+        $ruleParams["DueOffsetUnit"] = $cmbDueOffsetUnit.SelectedItem
+        $ruleParams["DueWeekendShift"] = $cmbDueWeekendShift.SelectedItem
+        $ruleParams["DueHolidayShift"] = $cmbDueHolidayShift.SelectedItem
+
+        $baseTask = $null
+        if ($type -eq "Task") {
+            if (-not $cmbTaskProj.SelectedItem) { [System.Windows.Forms.MessageBox]::Show("プロジェクトを選択してください。", "エラー", "OK", "Error"); return }
+            $baseTask = [PSCustomObject]@{
+                ProjectID = $cmbTaskProj.SelectedItem.ProjectID
+                カテゴリ = $cmbTaskCat.SelectedItem
+                優先度 = $cmbTaskPrio.SelectedItem
+                進捗度 = $cmbTaskStatus.SelectedItem
+                通知設定 = $cmbTaskNotify.SelectedItem
+                サブカテゴリ = $cmbTaskSubCat.SelectedItem
+                タスク内容 = $txtTaskContent.Text
+            }
+        } elseif ($type -eq "Project") {
+            if ($cmbSourceProj.SelectedItem -and $cmbSourceProj.SelectedItem -isnot [string]) {
+                $ruleParams["SourceProjectID"] = $cmbSourceProj.SelectedItem.ProjectID
+            }
+        } elseif ($type -eq "Event") {
+            $ruleParams["IsAllDay"] = $chkEventAllDay.Checked
+            if (-not $chkEventAllDay.Checked) {
+                $ruleParams["StartTime"] = $dtpEventStart.Value.ToString("HH:mm")
+                $ruleParams["EndTime"] = $dtpEventEnd.Value.ToString("HH:mm")
+            }
+        }
+
+        $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+        if ($null -eq $rules) { $rules = @() }
+        elseif ($rules -isnot [array]) { $rules = @($rules) }
+        $rules = @($rules | Where-Object { $_ })
+        
+        $id = if ($dgv.SelectedRows.Count -gt 0) { $dgv.SelectedRows[0].Cells["RuleID"].Value } else { [guid]::NewGuid().ToString() }
+        $existing = $rules | Where-Object { $_.RuleID -eq $id } | Select-Object -First 1
+        
+        $nextRun = $dtpNextRun.Value.ToString("yyyy-MM-dd")
+        
+        # オブジェクト構築
+        $newRuleObj = [PSCustomObject]@{
+            RuleID = $id
+            Type = $type
+            TaskName = "$($txtTitle.Text)".Trim()
+            TriggerModes = $triggers
+            CalculationBase = $calcBase
+            IntervalDays = $numInterval.Value
+            IntervalUnit = $unit
+            Frequency = $cmbIntervalPreset.SelectedItem
+            PreGenDays = $numPreGen.Value
+            WeekendShift = $cmbGenWeekendShift.SelectedItem
+            HolidayShift = $cmbGenHolidayShift.SelectedItem
+            Params = $ruleParams
+            NextRunDate = $nextRun
+            TheoreticalDate = $nextRun
+            BaseTask = $baseTask
+            IsActive = $chkIsActive.Checked
+        }
+
+        if ($existing) {
+            # 既存プロパティを更新 (参照維持のため)
+            foreach ($prop in $newRuleObj.PSObject.Properties) {
+                if ($existing.PSObject.Properties[$prop.Name]) { $existing.($prop.Name) = $prop.Value }
+                else { $existing | Add-Member -MemberType NoteProperty -Name $prop.Name -Value $prop.Value -Force }
+            }
+        } else {
+            $rules += $newRuleObj
+        }
+
+        if ($initialItem) {
+            $linkId = if ($initialType -eq 'Project') { $initialItem.ProjectID } else { $initialItem.ID }
+            if ($existing) { $existing.CurrentInstanceID = $linkId } else { $newRuleObj | Add-Member -MemberType NoteProperty -Name 'CurrentInstanceID' -Value $linkId -Force }
+        }
+
+        Save-DataFile -filePath $script:RecurringRulesFile -dataObject $rules
+        & $loadRules
+        Update-AllViews # カレンダー連携
+        [System.Windows.Forms.MessageBox]::Show("定期実行ルールを保存しました。", "完了", "OK", "Information")
+        $form.Close()
+    })
+    
+    $btnDelete.Add_Click({
+        if ($dgv.SelectedRows.Count -gt 0) {
+            $id = $dgv.SelectedRows[0].Cells["RuleID"].Value
+            $name = $dgv.SelectedRows[0].Cells["Title"].Value
+            if ([System.Windows.Forms.MessageBox]::Show("定期ルール '$name' を削除しますか？", "確認", "YesNo", "Warning") -eq "Yes") {
+                
+                # 1. ルール削除時の連動処理
+                if ([System.Windows.Forms.MessageBox]::Show("このルールから生成された未完了のアイテムもすべて削除しますか？", "連動削除", "YesNo", "Question") -eq "Yes") {
+                    # Tasks (未完了のみ)
+                    $script:AllTasks = @($script:AllTasks | Where-Object { -not ($_.ParentRuleID -eq $id -and $_.進捗度 -ne '完了済み') })
+                    Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
+                    
+                    # Projects (すべて)
+                    $script:Projects = @($script:Projects | Where-Object { -not ($_.ParentRuleID -eq $id) })
+                    Save-DataFile -filePath $script:ProjectsFile -dataObject $script:Projects
+                    
+                    # Events (未来のイベント)
+                    $now = Get-Date
+                    foreach ($key in $script:AllEvents.PSObject.Properties.Name) {
+                        $evts = $script:AllEvents.$key
+                        $newEvts = @()
+                        $modified = $false
+                        foreach ($e in $evts) {
+                            $eStart = if ($e.StartTime) { [datetime]$e.StartTime } else { [datetime]::MaxValue }
+                            # ルール由来かつ未来のイベントを削除
+                            if ($e.ParentRuleID -eq $id -and $eStart -gt $now) {
+                                $modified = $true
+                            } else {
+                                $newEvts += $e
+                            }
+                        }
+                        if ($modified) { $script:AllEvents.$key = $newEvts }
+                    }
+                    Save-Events
+                    if (Get-Command Update-AllViews -ErrorAction SilentlyContinue) { Update-AllViews }
+                }
+
+                $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+                if ($rules) {
+                    if ($rules -isnot [array]) { $rules = @($rules) }
+                    $newRules = @($rules | Where-Object { $_.RuleID -ne $id })
+                    Save-DataFile -filePath $script:RecurringRulesFile -dataObject $newRules
+                    & $loadRules
+                }
+            }
+        }
+    })
+
+    & $loadRules
+
+    # --- 初期化パラメータの処理 ---
+    if ($initialRuleId) {
+        foreach ($row in $dgv.Rows) {
+            if ($row.Cells["RuleID"].Value -eq $initialRuleId) {
+                $row.Selected = $true; break
+            }
+        }
+    } elseif ($initialItem) {
+        $dgv.ClearSelection()
+        
+        switch ($initialType) {
+            "Task" { 
+                $radioTask.Checked = $true 
+                $txtTitle.Text = $initialItem.タスク
+                
+                $proj = $cmbTaskProj.Items | Where-Object { $_.ProjectID -eq $initialItem.ProjectID } | Select-Object -First 1
+                if ($proj) { $cmbTaskProj.SelectedItem = $proj }
+                $cmbTaskCat.SelectedItem = $initialItem.カテゴリ
+                $cmbTaskPrio.SelectedItem = $initialItem.優先度
+                if ($initialItem.期日) { try { $dtpNextRun.Value = ([datetime]$initialItem.期日).AddDays(1) } catch {} }
+            }
+            "Project" { 
+                $radioProject.Checked = $true 
+                $txtTitle.Text = $initialItem.ProjectName
+                if ($initialItem.ProjectDueDate) { try { $dtpNextRun.Value = ([datetime]$initialItem.ProjectDueDate).AddDays(1) } catch {} }
+            }
+            "Event" { 
+                $radioEvent.Checked = $true 
+                $txtTitle.Text = $initialItem.Title
+                if ($initialItem.IsAllDay) { $chkEventAllDay.Checked = $true }
+                else {
+                    $chkEventAllDay.Checked = $false
+                    if ($initialItem.StartTime) { try { $dtpEventStart.Value = [datetime]$initialItem.StartTime } catch {} }
+                    if ($initialItem.EndTime) { try { $dtpEventEnd.Value = [datetime]$initialItem.EndTime } catch {} }
+                }
+                if ($initialItem.StartTime) { try { $dtpNextRun.Value = ([datetime]$initialItem.StartTime).AddDays(1) } catch {} }
+            }
+        }
+    }
+
+    Set-Theme -form $form -IsDarkMode $script:isDarkMode
+    $form.ShowDialog($parentForm)
+}
+
+function Get-PendingRecurringTasks {
+    $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+    if (-not $rules) { return @() }
+    if ($rules -isnot [array]) { $rules = @($rules) }
+    $today = (Get-Date).Date
+    # IsActiveかつ、次回予定日が今日以前のものを抽出
+    return @($rules | Where-Object { $_.IsActive -and ([datetime]$_.NextRunDate).Date -le $today })
+}
+
 function Show-TaskInputForm {
-    param ([psobject]$existingTask = $null, [string]$projectIDForNew = $null, $dateForNew = $null)
-    $form = New-Object System.Windows.Forms.Form; $form.Width = 420; $form.Height = 480; $form.StartPosition = 'CenterScreen'
-    if ($existingTask) { $form.Text = "タスクの編集" } else { $form.Text = "プロジェクト／タスクの新規追加" }
+    param ([psobject]$existingTask = $null, [string]$projectIDForNew = $null, $dateForNew = $null, [bool]$isRecurring = $false, [bool]$IsTemplateMode = $false)
+    $form = New-Object System.Windows.Forms.Form; $form.Width = 450; $form.Height = 650; $form.StartPosition = 'CenterScreen'
+    if ($existingTask) { $form.Text = if ($IsTemplateMode) { "テンプレートタスクの編集" } elseif ($isRecurring) { "タスクの定期設定" } else { "タスクの編集" } } else { $form.Text = if ($IsTemplateMode) { "テンプレートタスクの追加" } else { "プロジェクト／タスクの新規追加" } }
 
     # --- プロジェクト ---
     $labelProject=New-Object System.Windows.Forms.Label;$labelProject.Text="プロジェクト：";$labelProject.Location="10, 20";$form.Controls.Add($labelProject)
@@ -1500,9 +2412,85 @@ function Show-TaskInputForm {
     $labelTask=New-Object System.Windows.Forms.Label;$labelTask.Text="タスク内容：";$labelTask.Location="10, 260";$form.Controls.Add($labelTask)
     $textTask=New-Object System.Windows.Forms.TextBox;$textTask.Multiline=$true;$textTask.Location="10, 280";$textTask.Size="380, 80";$form.Controls.Add($textTask)
     
+    # --- 定期設定 (拡張部分) ---
+    $lblGeneratedInfo = New-Object System.Windows.Forms.Label
+    $lblGeneratedInfo.Text = "ℹ️ このタスクは定期実行ルールから生成されました"
+    $lblGeneratedInfo.Location = "10, 380"
+    $lblGeneratedInfo.AutoSize = $true
+    $lblGeneratedInfo.ForeColor = [System.Drawing.Color]::Gray
+    $lblGeneratedInfo.Visible = $false
+    $form.Controls.Add($lblGeneratedInfo)
+
+    $chkRecurring = New-Object System.Windows.Forms.CheckBox
+    $chkRecurring.Text = "このタスクを定期実行（ルーチン）にする"
+    $chkRecurring.Location = "10, 380"
+    $chkRecurring.AutoSize = $true
+    $chkRecurring.Checked = $isRecurring
+    $form.Controls.Add($chkRecurring)
+
+    $grpRecurring = New-Object System.Windows.Forms.GroupBox
+    $grpRecurring.Text = "定期設定"
+    $grpRecurring.Location = "10, 410"
+    $grpRecurring.Size = "410, 100"
+    $grpRecurring.Enabled = $isRecurring
+    $form.Controls.Add($grpRecurring)
+
+    $lblFreq = New-Object System.Windows.Forms.Label; $lblFreq.Text = "頻度:"; $lblFreq.Location = "10, 25"; $lblFreq.AutoSize = $true
+    $grpRecurring.Controls.Add($lblFreq)
+
+    $cmbFreq = New-Object System.Windows.Forms.ComboBox
+    $cmbFreq.Location = "50, 22"
+    $cmbFreq.Width = 100
+    $cmbFreq.DropDownStyle = "DropDownList"
+    $cmbFreq.Items.AddRange(@("毎日", "毎週", "毎月"))
+    $cmbFreq.SelectedIndex = 0
+    $grpRecurring.Controls.Add($cmbFreq)
+
+    $pnlFreqOptions = New-Object System.Windows.Forms.Panel
+    $pnlFreqOptions.Location = "10, 55"
+    $pnlFreqOptions.Size = "390, 40"
+    $grpRecurring.Controls.Add($pnlFreqOptions)
+
+    # Weekly Options
+    $chkDays = @()
+    $days = @("月", "火", "水", "木", "金", "土", "日")
+    $x = 0
+    foreach ($d in $days) {
+        $c = New-Object System.Windows.Forms.CheckBox; $c.Text = $d; $c.AutoSize = $true; $c.Location = "$x, 5"; $c.Visible = $false
+        $pnlFreqOptions.Controls.Add($c)
+        $chkDays += $c
+        $x += 45
+    }
+
+    # Monthly Options
+    $lblDay = New-Object System.Windows.Forms.Label; $lblDay.Text = "毎月:"; $lblDay.Location = "0, 8"; $lblDay.AutoSize = $true; $lblDay.Visible = $false
+    $numDay = New-Object System.Windows.Forms.NumericUpDown; $numDay.Location = "40, 5"; $numDay.Width = 50; $numDay.Minimum = 1; $numDay.Maximum = 31; $numDay.Visible = $false
+    $lblDaySuffix = New-Object System.Windows.Forms.Label; $lblDaySuffix.Text = "日"; $lblDaySuffix.Location = "95, 8"; $lblDaySuffix.AutoSize = $true; $lblDaySuffix.Visible = $false
+    $pnlFreqOptions.Controls.AddRange(@($lblDay, $numDay, $lblDaySuffix))
+
     # --- ボタン ---
-    $buttonSave=New-Object System.Windows.Forms.Button;$buttonSave.Text="保存";$buttonSave.Location="120, 380";$form.Controls.Add($buttonSave)
-    $buttonCancel=New-Object System.Windows.Forms.Button;$buttonCancel.Text="キャンセル";$buttonCancel.Location="210, 380";$form.Controls.Add($buttonCancel)
+    $buttonSave=New-Object System.Windows.Forms.Button;$buttonSave.Text="保存";$buttonSave.Location="120, 530";$form.Controls.Add($buttonSave)
+    $buttonCancel=New-Object System.Windows.Forms.Button;$buttonCancel.Text="キャンセル";$buttonCancel.Location="210, 530";$form.Controls.Add($buttonCancel)
+
+    # --- テンプレートモード時のUI調整 ---
+    if ($IsTemplateMode) {
+        $labelProject.Visible = $false; $comboProject.Visible = $false
+        $labelDue.Visible = $false; $datePicker.Visible = $false
+        $labelNotify.Visible = $false; $comboNotify.Visible = $false
+        $chkRecurring.Visible = $false; $grpRecurring.Visible = $false
+
+        # レイアウト再配置
+        $labelPriority.Location = "10, 20"; $comboPriority.Location = "10, 40"
+        $labelStatus.Location = "150, 20"; $comboStatus.Location = "150, 40"
+        
+        $labelCategory.Location = "10, 80"; $comboCategory.Location = "10, 100"
+        $labelSubCategory.Location = "220, 80"; $comboSubCategory.Location = "220, 100"
+        
+        $labelTask.Location = "10, 140"; $textTask.Location = "10, 160"
+        
+        $buttonSave.Location = "120, 260"; $buttonCancel.Location = "210, 260"
+        $form.Height = 350
+    }
 
     # --- イベントハンドラとデータロード ---
     $updateSubCategories = {
@@ -1518,9 +2506,48 @@ function Show-TaskInputForm {
     }
     $comboCategory.Add_SelectedIndexChanged($updateSubCategories)
 
+    $chkRecurring.Add_CheckedChanged({ $grpRecurring.Enabled = $chkRecurring.Checked })
+    $cmbFreq.Add_SelectedIndexChanged({
+        $freq = $cmbFreq.SelectedItem
+        foreach ($c in $chkDays) { $c.Visible = ($freq -eq "毎週") }
+        $lblDay.Visible = ($freq -eq "毎月")
+        $numDay.Visible = ($freq -eq "毎月")
+        $lblDaySuffix.Visible = ($freq -eq "毎月")
+    })
+
     $comboCategory.Items.AddRange($script:Categories.PSObject.Properties.Name)
 
     if ($existingTask) {
+        # --- 定期タスク判定ロジック ---
+        if ($existingTask.タスク -match " \(定期\)") {
+            # 自動生成された子タスクの場合
+            $chkRecurring.Visible = $false
+            $grpRecurring.Visible = $false
+            $lblGeneratedInfo.Visible = $true
+        } else {
+            # 通常タスクの場合、既存ルールを確認して復元
+            $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+            if ($rules) {
+                if ($rules -isnot [array]) { $rules = @($rules) }
+                $matchedRule = $rules | Where-Object { $_.TaskName -eq $existingTask.タスク } | Select-Object -First 1
+                
+                if ($matchedRule) {
+                    $chkRecurring.Checked = $true
+                    $grpRecurring.Enabled = $true
+                    if ($cmbFreq.Items.Contains($matchedRule.Frequency)) {
+                        $cmbFreq.SelectedItem = $matchedRule.Frequency
+                    }
+                    if ($matchedRule.Frequency -eq "毎週" -and $matchedRule.Params.Days) {
+                        for ($i=0; $i -lt 7; $i++) { 
+                            if ($matchedRule.Params.Days -contains $days[$i]) { $chkDays[$i].Checked = $true }
+                        }
+                    } elseif ($matchedRule.Frequency -eq "毎月" -and $matchedRule.Params.Day) {
+                        $numDay.Value = $matchedRule.Params.Day
+                    }
+                }
+            }
+        }
+
         $projectToSelect = $comboProject.Items | Where-Object { $_.ProjectID -eq $existingTask.ProjectID } | Select-Object -First 1
         if ($projectToSelect) { $comboProject.SelectedItem = $projectToSelect }
 
@@ -1550,18 +2577,24 @@ function Show-TaskInputForm {
     $form.ActiveControl = $textTask; $form.AcceptButton = $buttonSave; $form.CancelButton = $buttonCancel
     
     $buttonSave.Add_Click({
-        $projectName = $comboProject.Text.Trim()
-        if ([string]::IsNullOrWhiteSpace($projectName)) { [System.Windows.Forms.MessageBox]::Show("プロジェクトは必須です。", "入力エラー", "OK", "Error"); return }
+        if (-not $IsTemplateMode) {
+            $projectName = $comboProject.Text.Trim()
+            if ([string]::IsNullOrWhiteSpace($projectName)) { [System.Windows.Forms.MessageBox]::Show("プロジェクトは必須です。", "入力エラー", "OK", "Error"); return }
+        }
         if ([string]::IsNullOrWhiteSpace($textTask.Text)) { [System.Windows.Forms.MessageBox]::Show("タスク内容は必須です。", "入力エラー", "OK", "Error"); return }
         if ([string]::IsNullOrWhiteSpace($comboCategory.SelectedItem)) { [System.Windows.Forms.MessageBox]::Show("カテゴリは必須です。", "入力エラー", "OK", "Error"); return }
 
-        $selectedProject = $script:Projects | Where-Object { $_.ProjectName -eq $projectName } | Select-Object -First 1
-
-        if (-not $selectedProject) {
-            $newProject = [PSCustomObject]@{ ProjectID = [guid]::NewGuid().ToString(); ProjectName = $projectName; ProjectDueDate = $null; WorkFiles = @(); Notification = "全体設定に従う"; ProjectColor = "#D3D3D3"; AutoArchiveTasks = $true }
-            $script:Projects += $newProject
-            Save-DataFile -filePath $script:ProjectsFile -dataObject $script:Projects
-            $selectedProject = $newProject
+        $selectedProjectID = $null
+        if (-not $IsTemplateMode) {
+            $projectName = $comboProject.Text.Trim()
+            $selectedProject = $script:Projects | Where-Object { $_.ProjectName -eq $projectName } | Select-Object -First 1
+            if (-not $selectedProject) {
+                $newProject = [PSCustomObject]@{ ProjectID = [guid]::NewGuid().ToString(); ProjectName = $projectName; ProjectDueDate = $null; WorkFiles = @(); Notification = "全体設定に従う"; ProjectColor = "#D3D3D3"; AutoArchiveTasks = $true }
+                $script:Projects += $newProject
+                Save-DataFile -filePath $script:ProjectsFile -dataObject $script:Projects
+                $selectedProject = $newProject
+            }
+            $selectedProjectID = $selectedProject.ProjectID
         }
         
         $dueDate = if ($datePicker.Checked) { $datePicker.Value.ToString("yyyy-MM-dd") } else { "" }
@@ -1571,21 +2604,95 @@ function Show-TaskInputForm {
         if ($newStatus -eq '完了済み' -and [string]::IsNullOrEmpty($completionDate)) { $completionDate = (Get-Date).ToString("yyyy-MM-dd") } 
         elseif ($newStatus -ne '完了済み' -and $existingTask -and $existingTask.進捗度 -eq '完了済み') { $completionDate = "" }
 
-        $form.Tag = [PSCustomObject]@{ 
+        $taskData = [PSCustomObject]@{ 
             "ID" = if ($existingTask -and $existingTask.ID) { $existingTask.ID } else { [guid]::NewGuid().ToString() }
-            "ProjectID" = $selectedProject.ProjectID
-            "期日" = $dueDate
+            "ProjectID" = $selectedProjectID
+            "期日" = if ($IsTemplateMode) { "" } else { $dueDate }
             "優先度" = $comboPriority.SelectedItem
             "タスク" = $textTask.Text.Trim()
             "進捗度" = $newStatus
-            "通知設定" = $comboNotify.SelectedItem
+            "通知設定" = if ($IsTemplateMode) { "全体設定に従う" } else { $comboNotify.SelectedItem }
             "カテゴリ" = $comboCategory.SelectedItem
             "サブカテゴリ" = $comboSubCategory.SelectedItem
             "保存日付" = if ($existingTask -and $existingTask.保存日付) { $existingTask.保存日付 } else { (Get-Date).ToString("yyyy-MM-dd") }
-            "完了日" = $completionDate
+            "完了日" = if ($IsTemplateMode) { "" } else { $completionDate }
             "TrackedTimeSeconds" = if ($existingTask) { $existingTask.TrackedTimeSeconds } else { 0 }
             "WorkFiles" = if ($existingTask) { @($existingTask.WorkFiles) } else { @() }
         }
+
+        if ($IsTemplateMode) {
+            $form.Tag = $taskData
+            $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $form.Close()
+            return
+        }
+
+        # --- 定期ルールの保存・更新・削除ロジック ---
+        $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+        if ($null -eq $rules) { $rules = @() }
+        elseif ($rules -isnot [array]) { $rules = @($rules) }
+        $originalTaskName = if ($existingTask) { $existingTask.タスク } else { "" }
+        $newTaskName = $textTask.Text.Trim()
+        $ruleUpdated = $false
+
+        if ($chkRecurring.Checked) {
+            # チェックON: ルールを作成または更新
+            $ruleParams = @{}
+            if ($cmbFreq.SelectedItem -eq "毎週") {
+                $selectedDays = @()
+                for ($i=0; $i -lt 7; $i++) { if ($chkDays[$i].Checked) { $selectedDays += $days[$i] } }
+                $ruleParams["Days"] = $selectedDays
+            } elseif ($cmbFreq.SelectedItem -eq "毎月") {
+                $ruleParams["Day"] = $numDay.Value
+            }
+
+            # 既存ルールを探す（名前変更前の名前で検索）
+            $existingRule = $null
+            if (-not [string]::IsNullOrEmpty($originalTaskName)) {
+                $existingRule = $rules | Where-Object { $_.TaskName -eq $originalTaskName } | Select-Object -First 1
+            }
+
+            if ($existingRule) {
+                # 更新
+                $existingRule.TaskName = $newTaskName
+                $existingRule.Frequency = $cmbFreq.SelectedItem
+                $existingRule.Params = $ruleParams
+                $existingRule.BaseTask = $taskData
+            } else {
+                # 新規作成
+                $newRule = [PSCustomObject]@{
+                    RuleID = [guid]::NewGuid().ToString()
+                    Type = 'Task'
+                    TaskName = $newTaskName
+                    Frequency = $cmbFreq.SelectedItem
+                    Params = $ruleParams
+                    BaseTask = $taskData
+                }
+                $rules += $newRule
+            }
+            
+            # Typeプロパティの補完 (既存ルール更新時)
+            if ($existingRule -and -not $existingRule.PSObject.Properties['Type']) {
+                $existingRule | Add-Member -MemberType NoteProperty -Name 'Type' -Value 'Task' -Force
+            }
+            
+            $ruleUpdated = $true
+        } else {
+            # チェックOFF: 既存ルールがあれば削除（名前変更前の名前で検索）
+            if (-not [string]::IsNullOrEmpty($originalTaskName)) {
+                $ruleToDelete = $rules | Where-Object { $_.TaskName -eq $originalTaskName } | Select-Object -First 1
+                if ($ruleToDelete) {
+                    $rules = @($rules | Where-Object { $_.RuleID -ne $ruleToDelete.RuleID })
+                    $ruleUpdated = $true
+                }
+            }
+        }
+
+        if ($ruleUpdated) {
+            Save-DataFile -filePath $script:RecurringRulesFile -dataObject $rules
+        }
+
+        $form.Tag = $taskData
         
         $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
         Show-SaveFeedbackAndClose -FormToClose $form -Message "タスクを保存しました"
@@ -2986,6 +4093,7 @@ function Show-TemplateEditorForm {
         $selectedTemplateName = $listTemplates.SelectedItem
         if(-not $selectedTemplateName){ return }
         $newTask = Show-TemplateTaskInputForm -parentForm $editorForm
+        $newTask = Show-TaskInputForm -IsTemplateMode $true
         if($newTask){
             $currentTasks = @($templates.$selectedTemplateName)
             $currentTasks += $newTask
@@ -3000,6 +4108,7 @@ function Show-TemplateEditorForm {
         if(-not $selectedTemplateName -or $listTasks.SelectedItems.Count -eq 0){ return }
         $taskToEdit = $listTasks.SelectedItems[0].Tag
         $editedTask = Show-TemplateTaskInputForm -existingTask $taskToEdit -parentForm $editorForm
+        $editedTask = Show-TaskInputForm -existingTask $taskToEdit -IsTemplateMode $true
         if($editedTask){
             $taskToEdit.タスク = $editedTask.タスク
             $taskToEdit.優先度 = $editedTask.優先度
@@ -3795,6 +4904,22 @@ function Update-DataGridView {
     $script:taskDataGridView.SuspendLayout()
     try {
         $script:taskDataGridView.Rows.Clear()
+        $colors = Get-ThemeColors -IsDarkMode $script:isDarkMode
+
+        # --- パフォーマンス改善: 時間記録の事前集計 ---
+        # ループ内で毎回 Where-Object を実行すると遅いため、ハッシュテーブルで事前に計算しておく
+        $timeByTaskID = @{}
+        if ($script:AllTimeLogs) {
+            foreach ($log in $script:AllTimeLogs) {
+                if ($log.TaskID -and $log.StartTime -and $log.EndTime) {
+                    try {
+                        $duration = ([datetime]$log.EndTime - [datetime]$log.StartTime).TotalSeconds
+                        if ($timeByTaskID.ContainsKey($log.TaskID)) { $timeByTaskID[$log.TaskID] += $duration }
+                        else { $timeByTaskID[$log.TaskID] = $duration }
+                    } catch {}
+                }
+            }
+        }
 
         [array]$tasksToDisplay = if ($script:hideCompletedMenuItem -and $script:hideCompletedMenuItem.Checked) {
             $script:AllTasks | Where-Object { $_.進捗度 -ne '完了済み' }
@@ -3853,11 +4978,13 @@ function Update-DataGridView {
 
                 if ($projectCalcGroup) {
                     $calcTasks = $projectCalcGroup.Group
-                    $taskIdsInProject = $calcTasks | ForEach-Object { $_.ID }
-                    $projectLogs = $script:AllTimeLogs | Where-Object { $taskIdsInProject -contains $_.TaskID -and $_.EndTime }
-                    if ($projectLogs) {
-                        $totalProjectSeconds = ($projectLogs | ForEach-Object { ([datetime]$_.EndTime - [datetime]$_.StartTime).TotalSeconds } | Measure-Object -Sum).Sum
+                    # 事前集計データを使用して高速化
+                    foreach ($t in $calcTasks) {
+                        if ($timeByTaskID.ContainsKey($t.ID)) {
+                            $totalProjectSeconds += $timeByTaskID[$t.ID]
+                        }
                     }
+                    $taskIdsInProject = $calcTasks.ID
                     if ($script:currentlyTrackingTaskID -and $taskIdsInProject -contains $script:currentlyTrackingTaskID) {
                         $trackingLog = $script:AllTimeLogs | Where-Object { $_.TaskID -eq $script:currentlyTrackingTaskID -and -not $_.EndTime } | Select-Object -Last 1
                         if ($trackingLog) {
@@ -3902,9 +5029,8 @@ function Update-DataGridView {
                                                                       タスク
                         foreach ($task in $sortedTasks) {
                             $totalTaskSeconds = 0
-                            $taskLogs = $script:AllTimeLogs | Where-Object { $_.TaskID -eq $task.ID -and $_.EndTime }
-                            if ($taskLogs) {
-                                $totalTaskSeconds = ($taskLogs | ForEach-Object { ([datetime]$_.EndTime - [datetime]$_.StartTime).TotalSeconds } | Measure-Object -Sum).Sum
+                            if ($timeByTaskID.ContainsKey($task.ID)) {
+                                $totalTaskSeconds = $timeByTaskID[$task.ID]
                             }
                             if ($task.ID -eq $script:currentlyTrackingTaskID) {
                                 $trackingLog = $script:AllTimeLogs | Where-Object { $_.TaskID -eq $task.ID -and -not $_.EndTime } | Select-Object -Last 1
@@ -3933,6 +5059,11 @@ function Update-DataGridView {
                             } else {
                                 $newRow.DefaultCellStyle.Font = $script:datagridRegularFont
                                 
+                                # 高優先度の強調表示
+                                if ($task.優先度 -eq '高') {
+                                    $newRow.DefaultCellStyle.BackColor = if ($script:isDarkMode) { [System.Drawing.Color]::FromArgb(60, 60, 0) } else { [System.Drawing.Color]::LightYellow }
+                                }
+
                                 # 期日を過ぎたタスクの文字色を赤くする
                                 $isOverdue = $false
                                 if (-not [string]::IsNullOrWhiteSpace($task.期日)) {
@@ -3941,12 +5072,13 @@ function Update-DataGridView {
                                     } catch {}
                                 }
                                 if ($isOverdue) {
-                                    $newRow.DefaultCellStyle.ForeColor = (Get-ThemeColors -IsDarkMode $script:isDarkMode).ErrorFore
+                                    $newRow.DefaultCellStyle.ForeColor = $colors.ErrorFore
                                 }
 
                                 if ($task.ID -eq $script:currentlyTrackingTaskID) {
                                     $newRow.Cells[7].Value = "■ 停止"
                                     $newRow.DefaultCellStyle.BackColor = [System.Drawing.Color]::LightGreen
+                                    if ($script:isDarkMode) { $newRow.DefaultCellStyle.BackColor = [System.Drawing.Color]::DarkGreen }
                                 } else {
                                     $newRow.Cells[7].Value = "▶ 開始"
                                 }
@@ -3977,9 +5109,13 @@ function Update-DataGridView {
                 $calcTasks = if ($categoryCalcGroup) { $categoryCalcGroup.Group } else { @() }
                 $progressValues = $calcTasks | ForEach-Object { if ($progressMapping.ContainsKey($_.進捗度)) { $progressMapping[$_.進捗度] } else { 0 } }
                 $averageProgress = if ($progressValues.Count -gt 0) { [int]($progressValues | Measure-Object -Average).Average } else { 0 }
-                $taskIdsInCategory = if ($calcTasks) { $calcTasks.ID } else { @() }
-                $categoryLogs = $script:AllTimeLogs | Where-Object { $taskIdsInCategory -contains $_.TaskID -and $_.EndTime }
-                $totalCategorySeconds = if ($categoryLogs) { ($categoryLogs | ForEach-Object { ([datetime]$_.EndTime - [datetime]$_.StartTime).TotalSeconds } | Measure-Object -Sum).Sum } else { 0 }
+                
+                $totalCategorySeconds = 0
+                foreach ($t in $calcTasks) {
+                    if ($timeByTaskID.ContainsKey($t.ID)) {
+                        $totalCategorySeconds += $timeByTaskID[$t.ID]
+                    }
+                }
 
                 $categoryRowIndex = $script:taskDataGridView.Rows.Add(@(
                     $categoryNameWithPrefix, $null, $averageProgress, $null,
@@ -4003,9 +5139,8 @@ function Update-DataGridView {
                                                                   タスク
                     foreach ($task in $sortedTasks) {
                         $totalTaskSeconds = 0
-                        $taskLogs = $script:AllTimeLogs | Where-Object { $_.TaskID -eq $task.ID -and $_.EndTime }
-                        if ($taskLogs) {
-                            $totalTaskSeconds = ($taskLogs | ForEach-Object { ([datetime]$_.EndTime - [datetime]$_.StartTime).TotalSeconds } | Measure-Object -Sum).Sum
+                        if ($timeByTaskID.ContainsKey($task.ID)) {
+                            $totalTaskSeconds = $timeByTaskID[$task.ID]
                         }
                         if ($task.ID -eq $script:currentlyTrackingTaskID) {
                             $trackingLog = $script:AllTimeLogs | Where-Object { $_.TaskID -eq $task.ID -and -not $_.EndTime } | Select-Object -Last 1
@@ -4034,6 +5169,11 @@ function Update-DataGridView {
                         } else {
                             $newRow.DefaultCellStyle.Font = $script:datagridRegularFont
 
+                            # 高優先度の強調表示
+                            if ($task.優先度 -eq '高') {
+                                $newRow.DefaultCellStyle.BackColor = if ($script:isDarkMode) { [System.Drawing.Color]::FromArgb(60, 60, 0) } else { [System.Drawing.Color]::LightYellow }
+                            }
+
                             # 期日を過ぎたタスクの文字色を赤くする
                             $isOverdue = $false
                             if (-not [string]::IsNullOrWhiteSpace($task.期日)) {
@@ -4042,12 +5182,13 @@ function Update-DataGridView {
                                 } catch {}
                             }
                             if ($isOverdue) {
-                                $newRow.DefaultCellStyle.ForeColor = (Get-ThemeColors -IsDarkMode $script:isDarkMode).ErrorFore
+                                $newRow.DefaultCellStyle.ForeColor = $colors.ErrorFore
                             }
 
                             if ($task.ID -eq $script:currentlyTrackingTaskID) {
                                 $newRow.Cells[7].Value = "■ 停止"
                                 $newRow.DefaultCellStyle.BackColor = [System.Drawing.Color]::LightGreen
+                                if ($script:isDarkMode) { $newRow.DefaultCellStyle.BackColor = [System.Drawing.Color]::DarkGreen }
                             } else {
                                 $newRow.Cells[7].Value = "▶ 開始"
                             }
@@ -4164,11 +5305,11 @@ function Update-AssociatedFilesView {
 }
 
 function Start-EditTask { 
-    param([pscustomobject]$task)
+    param([pscustomobject]$task, [bool]$isRecurring = $false)
     
     # 1. フォームを表示して編集結果を取得
     # キャンセルされた場合は $null が返る
-    $editedTaskData = Show-TaskInputForm -existingTask $task
+    $editedTaskData = Show-TaskInputForm -existingTask $task -isRecurring $isRecurring
     
     # パイプライン汚染対策: 配列が返ってきた場合は最後の要素(本来の戻り値)を取得
     if ($editedTaskData -is [array]) {
@@ -4301,6 +5442,53 @@ function Set-TaskStatus {
         # 変更をCSVファイルに保存して永続化する
         Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
 
+        # --- 定期タスク「完了トリガー」の実装 ---
+        if ($newStatus -eq '完了済み' -and $oldStatus -ne '完了済み') {
+            $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+            if ($rules -isnot [array]) { $rules = @($rules) }
+            $rule = $rules | Where-Object { $_.CurrentInstanceID -eq $taskID } | Select-Object -First 1
+            
+            if ($rule -and $rule.TriggerModes -contains "OnCompletion" -and $rule.IsActive) {
+                # Determine Base Date based on CalculationBase setting
+                $calcBase = if ($rule.CalculationBase) { $rule.CalculationBase } else { "Generation" }
+                
+                $baseForNextCalc = $null
+                if ($calcBase -eq "Completion") {
+                    $baseForNextCalc = (Get-Date).Date # Today (Completion Date)
+                } else {
+                    # Generation Base (Fixed Schedule)
+                    $ruleTheoreticalDate = try { [datetime]$rule.TheoreticalDate } catch { (Get-Date).AddDays(-1) }
+                    # If theoretical date is in the past, use it as base to calculate next slot
+                    $baseForNextCalc = $ruleTheoreticalDate
+                }
+                
+                # 次に生成すべきアイテムの日付を計算
+                $shift = if ($rule.WeekendShift) { $rule.WeekendShift } else { "None" }
+                $hShift = if ($rule.HolidayShift) { $rule.HolidayShift } else { "None" }
+                $interval = if ($rule.IntervalDays) { [int]$rule.IntervalDays } else { 1 }
+                $unit = if ($rule.IntervalUnit) { $rule.IntervalUnit } else { "Day" }
+                $nextOccurrence = Get-NextRecurringDate -BaseDate $baseForNextCalc -Frequency $rule.Frequency -Params $rule.Params -WeekendShift $shift -HolidayShift $hShift -IntervalDays $interval -IntervalUnit $unit
+                
+                # 遅延時のスキップ処理: 次回予定日が過去の場合、今日以降になるまでスケジュールを進める
+                if ($calcBase -eq "Generation") {
+                    $today = (Get-Date).Date
+                    while ($nextOccurrence.ActualDate -lt $today) {
+                         $nextOccurrence = Get-NextRecurringDate -BaseDate $nextOccurrence.TheoreticalDate -Frequency $rule.Frequency -Params $rule.Params -WeekendShift $shift -HolidayShift $hShift -IntervalDays $interval -IntervalUnit $unit
+                    }
+                }
+
+                # 計算された次回の日付でアイテムを生成
+                $generationResult = Invoke-ItemGeneration -rule $rule -baseDateForCalc $nextOccurrence.TheoreticalDate -isInteractive $false
+                
+                if ($generationResult) {
+                    # ルールを更新 (生成関数が返した、さらに次の予定日で)
+                    $rule.NextRunDate = $generationResult.ActualDate.ToString("yyyy-MM-dd")
+                    $rule.TheoreticalDate = $generationResult.TheoreticalDate.ToString("yyyy-MM-dd")
+                    Save-DataFile -filePath $script:RecurringRulesFile -dataObject $rules
+                }
+            }
+        }
+
         # --- タスク完了時の即時アーカイブ機能 (PJ無関係) ---
         if ($newStatus -eq '完了済み' -and $oldStatus -ne '完了済み' -and $script:Settings.ArchiveTasksOnCompletion) {
             Move-TaskToArchive -tasksToArchive @($taskToUpdate)
@@ -4413,10 +5601,6 @@ function Remove-SelectedFilesFromProject {
 # ===================================================================
 # アーカイブ機能関連
 # ===================================================================
-
-# --- アーカイブファイルパスの定義 ---
-$script:ArchivedTasksFile = Join-Path -Path $script:AppRoot -ChildPath "archived_tasks.csv"
-$script:ArchivedProjectsFile = Join-Path -Path $script:AppRoot -ChildPath "archived_projects.json"
 
 # --- アーカイブファイルの読み込み関数 ---
 
@@ -5107,6 +6291,11 @@ function Update-CalendarGrid {
     $localProjects = $script:Projects
     $localIsDarkMode = $script:isDarkMode
     $localCalendarGrid = $script:calendarGrid
+    
+    # 追加: 定期ルールを読み込み (次回予定表示用)
+    $localRecurringRules = Get-DataFileContent -filePath $script:RecurringRulesFile
+    if ($null -eq $localRecurringRules) { $localRecurringRules = @() }
+    if ($localRecurringRules -isnot [array]) { $localRecurringRules = @($localRecurringRules) }
 
     # --- 設定値の取得 ---
     $weekStart = if ($null -ne $script:Settings.CalendarWeekStart) { [int]$script:Settings.CalendarWeekStart } else { 0 } # 0: Sunday, 1: Monday
@@ -5262,27 +6451,19 @@ function Update-CalendarGrid {
             $itemsPanel.BackColor = $backColor
 
             # --- Add Click Events ---
-            $clickAction = {
-                param($source, $e)
-                $control = $source
-                while ($control -and -not ($control -is [System.Windows.Forms.Panel] -and $control.Tag -is [datetime])) {
-                    $control = $control.Parent
+            $itemsPanel.Add_MouseClick({
+                param($s, $e)
+                if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) {
+                    $date = $s.Tag
+                    
+                    # 1. 日付選択処理 (既存ロジック)
+                    $script:selectedCalendarDate = $date
+                    if ($script:calendarGrid) { $script:calendarGrid.Tag = $date }
+                    Update-DayInfoPanel -date $date
+                    Update-TimelineView -date $date
+                    foreach($c in $script:calendarGrid.Controls) { if ($c -is [System.Windows.Forms.Panel]) { $c.Invalidate() } }
                 }
-                if (-not $control) { return }
-
-                $clickedDate = $control.Tag
-                $script:selectedCalendarDate = $clickedDate
-                if ($script:calendarGrid) { $script:calendarGrid.Tag = $clickedDate } # 選択状態を描画用に保存
-                Update-DayInfoPanel -date $clickedDate
-                Update-TimelineView -date $clickedDate
-                
-                foreach($c in $script:calendarGrid.Controls) {
-                    if ($c -is [System.Windows.Forms.Panel]) {
-                        $c.Invalidate() # 再描画を促して枠線を更新
-                    }
-                }
-            }
-            $itemsPanel.Add_Click($clickAction)
+            }.GetNewClosure())
 
             # --- Right-click Context Menu for adding events ---
             $dayContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
@@ -5362,38 +6543,72 @@ function Update-CalendarGrid {
 
                 # 1. Events
                 $evts = if ($localAllEvents.PSObject.Properties[$dateStr]) { @($localAllEvents.PSObject.Properties[$dateStr].Value) } else { @() }
-                $eventBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(100, 88, 153)) # Modern Purple
+                $eventColor = if ($localIsDarkMode) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::DarkOrange }
+                $eventBrush = New-Object System.Drawing.SolidBrush($eventColor)
                 foreach ($evt in $evts) {
                     if ($currentY + $lineHeight -gt $rect.Height) { break }
                     $itemRect = [System.Drawing.RectangleF]::new(5, $currentY, $rect.Width - 7, $lineHeight)
-                    $g.DrawString("● " + $evt.Title, $localCalendarItemFont, $eventBrush, $itemRect, $sfItem)
+                    
+                    $dispText = $evt.Title
+                    if (-not $evt.IsAllDay -and $evt.StartTime) {
+                        try { $dispText = ([datetime]$evt.StartTime).ToString("HH:mm") + " " + $evt.Title } catch {}
+                    }
+                    
+                    $g.DrawString($dispText, $localCalendarItemFont, $eventBrush, $itemRect, $sfItem)
                     $currentY += $lineHeight
                 }
                 $eventBrush.Dispose()
 
                 # 2. Project Due Dates
-                $projsDue = $script:Projects | Where-Object { -not [string]::IsNullOrWhiteSpace($_.ProjectDueDate) -and $(try { ([datetime]$_.ProjectDueDate).Date -eq $date.Date } catch { $false }) }
-                $projBrush = if ($script:isDarkMode) { New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(218, 165, 32)) } else { New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(184, 134, 11)) } # Goldenrod / DarkGoldenrod
                 $projsDue = $localProjects | Where-Object { -not [string]::IsNullOrWhiteSpace($_.ProjectDueDate) -and $(try { ([datetime]$_.ProjectDueDate).Date -eq $date.Date } catch { $false }) }
-                $projBrush = if ($localIsDarkMode) { New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(218, 165, 32)) } else { New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(184, 134, 11)) } # Goldenrod / DarkGoldenrod
+                $projColor = if ($localIsDarkMode) { [System.Drawing.Color]::LightGreen } else { [System.Drawing.Color]::Green }
+                $projBrush = New-Object System.Drawing.SolidBrush($projColor)
                 foreach ($proj in $projsDue) {
                     if ($currentY + $lineHeight -gt $rect.Height) { break }
                     $itemRect = [System.Drawing.RectangleF]::new(5, $currentY, $rect.Width - 7, $lineHeight)
-                    $g.DrawString("■ " + $proj.ProjectName, $localCalendarItemFont, $projBrush, $itemRect, $sfItem)
+                    $g.DrawString("[P] " + $proj.ProjectName, $localCalendarItemFont, $projBrush, $itemRect, $sfItem)
                     $currentY += $lineHeight
                 }
                 $projBrush.Dispose()
 
                 # 3. Task Due Dates
                 $tasksDue = $globallyFilteredTasks | Where-Object { -not [string]::IsNullOrWhiteSpace($_.期日) -and $(try { ([datetime]$_.期日).Date -eq $date.Date } catch { $false }) }
-                $taskBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(70, 130, 180)) # SteelBlue for both modes
+                $taskColor = if ($localIsDarkMode) { [System.Drawing.Color]::SkyBlue } else { [System.Drawing.Color]::Blue }
+                $taskBrush = New-Object System.Drawing.SolidBrush($taskColor)
                 foreach ($task in $tasksDue) {
                     if ($currentY + $lineHeight -gt $rect.Height) { break }
                     $itemRect = [System.Drawing.RectangleF]::new(5, $currentY, $rect.Width - 7, $lineHeight)
-                    $g.DrawString("✔ " + $task.タスク, $localCalendarItemFont, $taskBrush, $itemRect, $sfItem)
+                    $g.DrawString("[T] " + $task.タスク, $localCalendarItemFont, $taskBrush, $itemRect, $sfItem)
                     $currentY += $lineHeight
                 }
                 $taskBrush.Dispose()
+                
+                # 4. Recurring Rules (Planned)
+                # 過去の日付には予定を表示しない（生成スキップされるため）
+                if ($date.Date -ge (Get-Date).Date) {
+                    $rulesDue = $localRecurringRules | Where-Object { $_.IsActive -and $_.NextRunDate -eq $dateStr }
+                    $recurBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Gray)
+                    foreach ($rule in $rulesDue) {
+                        # 重複チェック: 同名のタスク/プロジェクト/イベントが既に表示されている場合は「(予)」を表示しない
+                        $isDuplicate = $false
+                        $rType = if ($rule.PSObject.Properties['Type']) { $rule.Type } else { 'Task' }
+                        
+                        if ($rType -eq 'Project') {
+                            foreach ($p in $projsDue) { if ($p.ProjectName -eq $rule.TaskName) { $isDuplicate = $true; break } }
+                        } elseif ($rType -eq 'Event') {
+                            foreach ($e in $evts) { if ($e.Title -eq $rule.TaskName) { $isDuplicate = $true; break } }
+                        } else { # Task
+                            foreach ($t in $tasksDue) { if ($t.タスク -eq $rule.TaskName) { $isDuplicate = $true; break } }
+                        }
+                        if ($isDuplicate) { continue }
+
+                        if ($currentY + $lineHeight -gt $rect.Height) { break }
+                        $itemRect = [System.Drawing.RectangleF]::new(5, $currentY, $rect.Width - 7, $lineHeight)
+                        $g.DrawString("(予) " + $rule.TaskName, $localCalendarItemFont, $recurBrush, $itemRect, $sfItem)
+                        $currentY += $lineHeight
+                    }
+                    $recurBrush.Dispose()
+                }
                 
                 $sfItem.Dispose()
                 
@@ -5679,6 +6894,10 @@ function Update-DayInfoPanel {
                     }
                 }
             })
+
+            $makeRecurringItem = $ctxMenu.Items.Add("このアイテムを定期ルールに登録")
+            $makeRecurringItem.Tag = $card.Tag
+            $makeRecurringItem.Add_Click({ param($s, $ea); New-RecurringRuleFromItem -item $s.Tag.Item })
 
             $deleteItem = $ctxMenu.Items.Add("削除")
             $deleteItem.Tag = $card.Tag
@@ -7037,4 +8256,617 @@ function Show-IcsExchangeForm {
     Set-Theme -form $form -IsDarkMode $script:isDarkMode
     if ($initialTab -eq "Import") { $tabControl.SelectedTab = $tabImport }
     $form.ShowDialog($parentForm) | Out-Null
+}
+
+# ===================================================================
+# 定期タスク生成エンジン (v12.1)
+# ===================================================================
+
+function Get-NextRecurringDate {
+    param(
+        [datetime]$BaseDate,
+        [string]$Frequency,
+        [hashtable]$Params,
+        [string]$WeekendShift = "None",
+        [string]$HolidayShift = "None",
+        [int]$IntervalDays = 1,
+        [string]$IntervalUnit = "Day"
+    )
+
+    $holidays = Get-Holidays
+    $nextTheoretical = $BaseDate
+    $isAdjusted = $false
+
+    if (-not [string]::IsNullOrEmpty($Frequency)) {
+        switch ($Frequency) {
+            "毎日" { $nextTheoretical = $BaseDate.AddDays(1) }
+            "毎週" {
+                $dayMap = @{ "日"=0; "月"=1; "火"=2; "水"=3; "木"=4; "金"=5; "土"=6 }
+                $targetDays = if ($Params -and $Params.Days) { $Params.Days | ForEach-Object { $dayMap[$_] } | Sort-Object } else { @() }
+                
+                if ($targetDays.Count -gt 0) {
+                    $found = $false
+                    for ($i = 1; $i -le 7; $i++) {
+                        $candidate = $BaseDate.AddDays($i)
+                        if ($targetDays -contains [int]$candidate.DayOfWeek) {
+                            $nextTheoretical = $candidate
+                            $found = $true
+                            break
+                        }
+                    }
+                    if (-not $found) { $nextTheoretical = $BaseDate.AddDays(7) }
+                } else {
+                    $nextTheoretical = $BaseDate.AddDays(7)
+                }
+            }
+            "毎月" {
+                $isEndOfMonth = if ($Params -and $Params.IsEndOfMonth) { $Params.IsEndOfMonth } else { $false }
+                $nextMonth = $BaseDate.AddMonths(1)
+                $daysInNextMonth = [DateTime]::DaysInMonth($nextMonth.Year, $nextMonth.Month)
+                
+                if ($isEndOfMonth) {
+                    $actualDay = $daysInNextMonth
+                    $nextTheoretical = Get-Date -Year $nextMonth.Year -Month $nextMonth.Month -Day $actualDay -Hour 0 -Minute 0 -Second 0
+                    $isAdjusted = $true
+                } else {
+                    $targetDay = if ($Params -and $Params.Day) { [int]$Params.Day } else { $BaseDate.Day }
+                    $actualDay = [Math]::Min($targetDay, $daysInNextMonth)
+                    $nextTheoretical = Get-Date -Year $nextMonth.Year -Month $nextMonth.Month -Day $actualDay -Hour 0 -Minute 0 -Second 0
+                    
+                    if ($targetDay -gt $daysInNextMonth) { $isAdjusted = $true }
+                }
+            }
+            default {
+                 $nextTheoretical = $BaseDate.AddDays(1)
+            }
+        }
+    } else {
+        # Use IntervalDays/Unit
+        if ($IntervalUnit -eq "Month") {
+             if ($Params -and $Params.IsEndOfMonth) {
+                 $nextMonth = $BaseDate.AddMonths($IntervalDays)
+                 $daysInNextMonth = [DateTime]::DaysInMonth($nextMonth.Year, $nextMonth.Month)
+                 $nextTheoretical = Get-Date -Year $nextMonth.Year -Month $nextMonth.Month -Day $daysInNextMonth -Hour 0 -Minute 0 -Second 0
+             } else {
+                 $nextTheoretical = $BaseDate.AddMonths($IntervalDays)
+                 if ($BaseDate.Day -ne $nextTheoretical.Day) { $isAdjusted = $true }
+             }
+        } elseif ($IntervalUnit -eq "Week") {
+             $nextTheoretical = $BaseDate.AddDays($IntervalDays * 7)
+        } else {
+             $nextTheoretical = $BaseDate.AddDays($IntervalDays)
+        }
+    }
+
+    $actualDate = $nextTheoretical
+    $loopCount = 0
+    while ($loopCount -lt 30) {
+        $loopCount++
+        $dateStr = $actualDate.ToString("yyyy-MM-dd")
+        $isHoliday = $holidays.ContainsKey($dateStr)
+        $dayOfWeek = $actualDate.DayOfWeek
+        $isWeekend = ($dayOfWeek -eq [DayOfWeek]::Saturday -or $dayOfWeek -eq [DayOfWeek]::Sunday)
+        
+        if (-not $isHoliday -and -not $isWeekend) { break }
+        
+        $shifted = $false
+        
+        # Holiday Shift
+        if ($isHoliday) {
+            if ($HolidayShift -eq "Before") { $actualDate = $actualDate.AddDays(-1); $shifted = $true }
+            elseif ($HolidayShift -eq "After") { $actualDate = $actualDate.AddDays(1); $shifted = $true }
+        }
+        
+        # Weekend Shift (Holiday shift takes precedence if applied)
+        if (-not $shifted -and $isWeekend) {
+            if ($WeekendShift -eq "Friday") {
+                if ($dayOfWeek -eq [DayOfWeek]::Saturday) { $actualDate = $actualDate.AddDays(-1) }
+                elseif ($dayOfWeek -eq [DayOfWeek]::Sunday) { $actualDate = $actualDate.AddDays(-2) }
+                $shifted = $true
+            } elseif ($WeekendShift -eq "Monday") {
+                if ($dayOfWeek -eq [DayOfWeek]::Saturday) { $actualDate = $actualDate.AddDays(2) }
+                elseif ($dayOfWeek -eq [DayOfWeek]::Sunday) { $actualDate = $actualDate.AddDays(1) }
+                $shifted = $true
+            }
+        }
+        
+        if (-not $shifted) { break } # No shift strategy applied
+    }
+
+    return [PSCustomObject]@{
+        TheoreticalDate = $nextTheoretical
+        ActualDate = $actualDate
+        IsAdjusted = $isAdjusted
+    }
+}
+
+function New-RecurringRuleFromItem {
+    param($item)
+    if (-not $item) { return }
+
+    # 種別とタイトルの判別
+    $type = "Task"; $title = ""
+    if ($item.PSObject.Properties.Name -contains 'ProjectName' -and -not ($item.PSObject.Properties.Name -contains 'タスク')) {
+        $type = "Project"; $title = $item.ProjectName
+    } elseif ($item.PSObject.Properties.Name -contains 'Title' -and ($item.PSObject.Properties.Name -contains 'StartTime' -or $item.PSObject.Properties.Name -contains 'EventDate')) {
+        $type = "Event"; $title = $item.Title
+    } else {
+        $type = "Task"; $title = $item.タスク
+    }
+
+    # 既存ルールの確認
+    $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+    if ($rules -isnot [array]) { $rules = @($rules) }
+    
+    # 既存ルールの検索 (Typeプロパティがない古いルールはTaskとみなす)
+    $existing = $rules | Where-Object { 
+        $ruleType = if ($_.Type) { $_.Type } else { "Task" }
+        $_.TaskName -eq $title -and $ruleType -eq $type 
+    } | Select-Object -First 1
+
+    $parent = if ($mainForm) { $mainForm } else { [System.Windows.Forms.Form]::ActiveForm }
+
+    if ($existing) {
+        if ([System.Windows.Forms.MessageBox]::Show("'$title' の定期ルールは既に存在します。編集しますか？", "確認", "YesNo", "Question") -eq "Yes") {
+            Show-RecurringRuleEditor -parentForm $parent -initialRuleId $existing.RuleID
+        }
+    } else {
+        Show-RecurringRuleEditor -parentForm $parent -initialItem $item -initialType $type
+    }
+}
+
+function Invoke-ItemGeneration {
+    param(
+        [PSCustomObject]$rule,
+        [datetime]$baseDateForCalc,
+        [bool]$isInteractive = $false
+    )
+
+    # 1. CurrentInstanceID の動的追加 (エラー回避)
+    if (-not $rule.PSObject.Properties['CurrentInstanceID']) {
+        $rule | Add-Member -MemberType NoteProperty -Name 'CurrentInstanceID' -Value $null -Force
+    }
+
+    # 2. 重複生成防止ロジック
+    if ($rule.CurrentInstanceID) {
+        $existingID = $rule.CurrentInstanceID
+        $isDuplicate = $false
+        
+        if ($rule.Type -eq 'Project') {
+            # プロジェクトの場合、IDがProjectsリストに存在するか確認
+            if ($script:Projects | Where-Object { $_.ProjectID -eq $existingID }) {
+                $isDuplicate = $true
+            }
+        } elseif ($rule.Type -eq 'Task') {
+            # タスクの場合、未完了状態で存在するか確認
+            $existingTask = $script:AllTasks | Where-Object { $_.ID -eq $existingID } | Select-Object -First 1
+            if ($existingTask -and $existingTask.進捗度 -ne '完了済み') {
+                $isDuplicate = $true
+            }
+        }
+
+        if ($isDuplicate) {
+            $msg = "このルールから生成された未完了のアイテムが既に存在します。さらにもう1つ生成しますか？`n(ルール: $($rule.TaskName))"
+            if ($isInteractive -or [System.Windows.Forms.MessageBox]::Show($msg, "重複生成の確認", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning) -eq 'No') {
+                return $null
+            }
+        }
+    }
+
+    $today = (Get-Date).Date
+    $newItemID = $null
+    
+    # 今回の「実際の日付」を計算 (土日祝補正)
+    $holidays = Get-Holidays
+    $currentActualDate = $baseDateForCalc
+    $shift = if ($rule.WeekendShift) { $rule.WeekendShift } else { "None" }
+    $hShift = if ($rule.HolidayShift) { $rule.HolidayShift } else { "None" }
+    
+    # 補正ロジック
+    $loopCount = 0
+    while ($loopCount -lt 30) {
+        $loopCount++
+        $dStr = $currentActualDate.ToString("yyyy-MM-dd")
+        $isHol = $holidays.ContainsKey($dStr)
+        $dow = $currentActualDate.DayOfWeek
+        $isWe = ($dow -eq [DayOfWeek]::Saturday -or $dow -eq [DayOfWeek]::Sunday)
+        
+        if (-not $isHol -and -not $isWe) { break }
+        
+        $shifted = $false
+        if ($isHol) {
+            if ($hShift -eq "Before") { $currentActualDate = $currentActualDate.AddDays(-1); $shifted = $true }
+            elseif ($hShift -eq "After") { $currentActualDate = $currentActualDate.AddDays(1); $shifted = $true }
+        }
+        if (-not $shifted -and $isWe) {
+            if ($shift -eq "Friday") {
+                if ($dow -eq [DayOfWeek]::Saturday) { $currentActualDate = $currentActualDate.AddDays(-1) }
+                elseif ($dow -eq [DayOfWeek]::Sunday) { $currentActualDate = $currentActualDate.AddDays(-2) }
+                $shifted = $true
+            } elseif ($shift -eq "Monday") {
+                if ($dow -eq [DayOfWeek]::Saturday) { $currentActualDate = $currentActualDate.AddDays(2) }
+                elseif ($dow -eq [DayOfWeek]::Sunday) { $currentActualDate = $currentActualDate.AddDays(1) }
+                $shifted = $true
+            }
+        }
+        if (-not $shifted) { break }
+    }
+    
+    $targetDateStr = $currentActualDate.ToString("yyyy-MM-dd")
+
+    # リードタイム計算 (タスク用)
+    $visibleDate = $null
+    if ($rule.LeadTimeDays -and [int]$rule.LeadTimeDays -gt 0) {
+        $visibleDate = $currentActualDate.AddDays(-[int]$rule.LeadTimeDays).ToString("yyyy-MM-dd")
+    }
+    
+    # 期日計算 (Due Date Calculation)
+    $dueOffset = if ($rule.Params -and $rule.Params.DueOffset) { [int]$rule.Params.DueOffset } else { 0 }
+    $dueUnit = if ($rule.Params -and $rule.Params.DueOffsetUnit) { $rule.Params.DueOffsetUnit } else { "日後" }
+    
+    $tempDueDate = $currentActualDate
+    switch ($dueUnit) {
+        "日後"   { $tempDueDate = $currentActualDate.AddDays($dueOffset) }
+        "週間後" { $tempDueDate = $currentActualDate.AddDays($dueOffset * 7) }
+        "ヶ月後" { $tempDueDate = $currentActualDate.AddMonths($dueOffset) }
+        default  { $tempDueDate = $currentActualDate.AddDays($dueOffset) }
+    }
+    
+    # 期日の回避設定適用
+    $dueWShift = if ($rule.Params -and $rule.Params.DueWeekendShift) { $rule.Params.DueWeekendShift } else { "None" }
+    $dueHShift = if ($rule.Params -and $rule.Params.DueHolidayShift) { $rule.Params.DueHolidayShift } else { "None" }
+    
+    $loopCount = 0
+    while ($loopCount -lt 30) {
+        $loopCount++
+        $dStr = $tempDueDate.ToString("yyyy-MM-dd")
+        $isHol = $holidays.ContainsKey($dStr)
+        $dow = $tempDueDate.DayOfWeek
+        $isWe = ($dow -eq [DayOfWeek]::Saturday -or $dow -eq [DayOfWeek]::Sunday)
+        if (-not $isHol -and -not $isWe) { break }
+        
+        $shifted = $false
+        if ($isHol) {
+            if ($dueHShift -eq "Before") { $tempDueDate = $tempDueDate.AddDays(-1); $shifted = $true }
+            elseif ($dueHShift -eq "After") { $tempDueDate = $tempDueDate.AddDays(1); $shifted = $true }
+        }
+        if (-not $shifted -and $isWe) {
+            if ($dueWShift -eq "Friday") {
+                if ($dow -eq [DayOfWeek]::Saturday) { $tempDueDate = $tempDueDate.AddDays(-1) }
+                elseif ($dow -eq [DayOfWeek]::Sunday) { $tempDueDate = $tempDueDate.AddDays(-2) }
+                $shifted = $true
+            } elseif ($dueWShift -eq "Monday") {
+                if ($dow -eq [DayOfWeek]::Saturday) { $tempDueDate = $tempDueDate.AddDays(2) }
+                elseif ($dow -eq [DayOfWeek]::Sunday) { $tempDueDate = $tempDueDate.AddDays(1) }
+                $shifted = $true
+            }
+        }
+        if (-not $shifted) { break }
+    }
+    $finalDueDateStr = $tempDueDate.ToString("yyyy-MM-dd")
+
+    switch ($rule.Type) {
+        "Task" {
+            $baseTask = $rule.BaseTask
+            $taskTitle = if ($baseTask.タスク内容) { $baseTask.タスク内容 } else { $rule.TaskName }
+            
+            # 重複チェック (同日、同名)
+            $duplicate = $script:AllTasks | Where-Object { $_.タスク -eq $taskTitle -and $_.期日 -eq $finalDueDateStr } | Select-Object -First 1
+            if ($duplicate) { 
+                if ($isInteractive) { 
+                    $msg = "「$taskTitle」($finalDueDateStr) は既に存在します。`n重複して作成しますか？"
+                    if ([System.Windows.Forms.MessageBox]::Show($msg, "重複確認", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question) -ne 'Yes') {
+                        return $null
+                    }
+                } else {
+                    return $null 
+                }
+            }
+
+            $newTask = [PSCustomObject]@{ 
+                ID = [guid]::NewGuid().ToString()
+                ProjectID = if ($baseTask) { $baseTask.ProjectID } else { $null }
+                期日 = $finalDueDateStr
+                優先度 = if ($baseTask) { $baseTask.優先度 } else { "中" }
+                タスク = $taskTitle
+                進捗度 = if ($baseTask.進捗度) { $baseTask.進捗度 } else { "未実施" }
+                通知設定 = if ($baseTask) { $baseTask.通知設定 } else { "全体設定に従う" }
+                カテゴリ = if ($baseTask) { $baseTask.カテゴリ } else { "" }
+                サブカテゴリ = if ($baseTask) { $baseTask.サブカテゴリ } else { "" }
+                保存日付 = $today.ToString("yyyy-MM-dd")
+                完了日 = ""
+                TrackedTimeSeconds = 0
+                WorkFiles = @()
+                VisibleDate = $visibleDate
+                ParentRuleID = $rule.RuleID
+            }
+            $script:AllTasks += $newTask
+            $newItemID = $newTask.ID
+            Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
+        }
+        "Project" {
+            $projName = $rule.TaskName
+            $duplicate = $script:Projects | Where-Object { $_.ProjectName -eq $projName -and $_.ProjectDueDate -eq $targetDateStr } | Select-Object -First 1
+            if ($duplicate) {
+                if ($isInteractive) {
+                    $msg = "プロジェクト「$projName」($targetDateStr) は既に存在します。`n重複して作成しますか？"
+                    if ([System.Windows.Forms.MessageBox]::Show($msg, "重複確認", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question) -ne 'Yes') {
+                        return $null
+                    }
+                } else { return $null }
+            }
+
+            $projDueDate = $finalDueDateStr
+            
+            $newProject = [PSCustomObject]@{ 
+                ProjectID = [guid]::NewGuid().ToString()
+                ProjectName = $projName
+                ProjectDueDate = $projDueDate
+                WorkFiles = @()
+                Notification = "全体設定に従う"
+                ProjectColor = "#D3D3D3"
+                AutoArchiveTasks = $true 
+                ParentRuleID = $rule.RuleID
+            }
+            $script:Projects += $newProject
+            $newItemID = $newProject.ProjectID
+            Save-DataFile -filePath $script:ProjectsFile -dataObject $script:Projects
+            
+            # 3. プロジェクトのテンプレートコピー機能
+            if ($rule.Params -and $rule.Params.SourceProjectID) {
+                $sourceProject = $script:Projects | Where-Object { $_.ProjectID -eq $rule.Params.SourceProjectID } | Select-Object -First 1
+                $srcTasks = $script:AllTasks | Where-Object { $_.ProjectID -eq $rule.Params.SourceProjectID }
+                
+                # 日付オフセットの計算 (仕様: プロジェクトが土日祝回避でズレた場合、中身のタスクの期日も同じ日数だけオフセットさせる)
+                $dateOffset = [timespan]::Zero
+                if ($sourceProject -and $sourceProject.ProjectDueDate) {
+                    try {
+                        $srcDate = [datetime]$sourceProject.ProjectDueDate
+                        $newDate = [datetime]$projDueDate # $projDueDate は既に土日祝回避済みの最終期日
+                        $dateOffset = $newDate - $srcDate
+                    } catch {}
+                }
+
+                $clonedTasks = @()
+                foreach ($t in $srcTasks) {
+                    $clonedTask = $t.PSObject.Copy()
+                    $clonedTask.ID = [guid]::NewGuid().ToString()
+                    $clonedTask.ProjectID = $newItemID
+                    $clonedTask.進捗度 = "未実施"
+                    $clonedTask.完了日 = ""
+                    $clonedTask.保存日付 = $today.ToString("yyyy-MM-dd")
+                    $clonedTask.TrackedTimeSeconds = 0
+                    
+                    if ($t.期日) {
+                        try {
+                            $tDate = [datetime]$t.期日
+                            $clonedTask.期日 = $tDate.Add($dateOffset).ToString("yyyy-MM-dd")
+                        } catch {
+                            $clonedTask.期日 = ""
+                        }
+                    } else {
+                        $clonedTask.期日 = "" 
+                    }
+                    
+                    $clonedTasks += $clonedTask
+                }
+                if ($clonedTasks.Count -gt 0) {
+                    $script:AllTasks += $clonedTasks
+                    Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
+                }
+            }
+        }
+        "Event" {
+            $evtTitle = $rule.TaskName
+            $duplicate = $false
+            if ($script:AllEvents.PSObject.Properties[$targetDateStr]) {
+                $evts = $script:AllEvents.$targetDateStr
+                foreach ($e in $evts) { if ($e.Title -eq $evtTitle) { $duplicate = $true; break } }
+            }
+            if ($duplicate) {
+                if ($isInteractive) {
+                    $msg = "イベント「$evtTitle」($targetDateStr) は既に存在します。`n重複して作成しますか？"
+                    if ([System.Windows.Forms.MessageBox]::Show($msg, "重複確認", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question) -ne 'Yes') {
+                        return $null
+                    }
+                } else { return $null }
+            }
+
+            $startTimeStr = $currentActualDate.ToString("yyyy-MM-ddT09:00:00")
+            $endTimeStr = $currentActualDate.ToString("yyyy-MM-ddT10:00:00")
+            $isAllDay = $true
+            
+            if ($rule.Params -and $rule.Params.StartTime) { 
+                $isAllDay = $false
+                $startTimeStr = $currentActualDate.ToString("yyyy-MM-dd") + "T" + $rule.Params.StartTime
+                $endTimeStr = $currentActualDate.ToString("yyyy-MM-dd") + "T" + $rule.Params.EndTime 
+            } elseif ($rule.Params -and $rule.Params.IsAllDay) {
+                    $isAllDay = $true
+            }
+
+            # 時間重複チェック (終日でない場合)
+            if (-not $isAllDay -and $isInteractive) {
+                $newStart = [datetime]$startTimeStr
+                $newEnd = [datetime]$endTimeStr
+                if (Test-EventOverlap -start $newStart -end $newEnd) {
+                    $msg = "指定された時間帯 ($($newStart.ToString('HH:mm')) - $($newEnd.ToString('HH:mm'))) には他の予定が入っています。`nそれでも作成しますか？"
+                    if ([System.Windows.Forms.MessageBox]::Show($msg, "重複警告", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning) -ne 'Yes') {
+                        return $null
+                    }
+                }
+            }
+
+            $newEvent = [PSCustomObject]@{ 
+                ID = [guid]::NewGuid().ToString()
+                Title = $evtTitle
+                StartTime = $startTimeStr
+                EndTime = $endTimeStr
+                ParentRuleID = $rule.RuleID
+                Status = 'Scheduled'
+                IsAllDay = $isAllDay 
+            }
+            
+            if (-not $script:AllEvents.PSObject.Properties[$targetDateStr]) { 
+                $script:AllEvents | Add-Member -MemberType NoteProperty -Name $targetDateStr -Value @() 
+            }
+            $currentEvents = [System.Collections.ArrayList]@($script:AllEvents.$targetDateStr)
+            $currentEvents.Add($newEvent)
+            $script:AllEvents.$targetDateStr = $currentEvents
+            $newItemID = $newEvent.ID
+            Save-Events
+        }
+    }
+
+    # 5. データの保存と同期 (CurrentInstanceIDの更新)
+    $rule.CurrentInstanceID = $newItemID
+
+    # 次回予定日の計算結果を返す
+    $interval = if ($rule.IntervalDays) { [int]$rule.IntervalDays } else { 1 }
+    $unit = if ($rule.IntervalUnit) { $rule.IntervalUnit } else { "Day" }
+    
+    # 次回計算の基準日: 今回生成した日(Theoretical)を基準にする
+    $calcResult = Get-NextRecurringDate -BaseDate $baseDateForCalc -Frequency $rule.Frequency -Params $rule.Params -WeekendShift $shift -HolidayShift $hShift -IntervalDays $interval -IntervalUnit $unit
+    
+    return $calcResult
+}
+
+function Invoke-RecurringTasks {
+    $rules = Get-DataFileContent -filePath $script:RecurringRulesFile
+    if (-not $rules) { return }; if ($rules -isnot [array]) { $rules = @($rules) }; $rules = @($rules | Where-Object { $_ })
+
+    # 2. 起動時の過去イベントチェック (未完了イベントの整理)
+    $now = Get-Date
+    $pastUnconfirmedEvents = @()
+    if ($script:AllEvents) {
+        foreach ($key in $script:AllEvents.PSObject.Properties.Name) {
+            $keyDate = [datetime]::MaxValue
+            try { $keyDate = [datetime]$key } catch { }
+            
+            if ($keyDate -gt $now.Date) { continue }
+            
+            $evts = $script:AllEvents.$key
+            foreach ($e in $evts) {
+                $eEnd = [datetime]::MaxValue
+                if ($e.EndTime) { try { $eEnd = [datetime]$e.EndTime } catch { } }
+                else { $eEnd = $keyDate.AddDays(1) }
+                
+                # 過去かつ未完了(Status!='Completed')かつルール由来のイベントを対象とする
+                if ($eEnd -lt $now -and $e.Status -ne 'Completed' -and $e.ParentRuleID) {
+                    $pastUnconfirmedEvents += $e
+                }
+            }
+        }
+    }
+
+    if ($pastUnconfirmedEvents.Count -gt 0) {
+        $msg = "過去の未確認イベントが $($pastUnconfirmedEvents.Count) 件あります。これらをすべて実績（完了）として記録しますか？"
+        if ([System.Windows.Forms.MessageBox]::Show($msg, "過去イベントの整理", "YesNo", "Question") -eq "Yes") {
+            foreach ($e in $pastUnconfirmedEvents) {
+                $newLog = [PSCustomObject]@{ ID = [guid]::NewGuid().ToString(); TaskID = $null; Memo = $e.Title; StartTime = $e.StartTime; EndTime = $e.EndTime }
+                $script:AllTimeLogs += $newLog
+                $e.Status = 'Completed'
+            }
+            Save-TimeLogs; Save-Events
+            if (Get-Command Update-AllViews -ErrorAction SilentlyContinue) { Update-AllViews }
+        }
+    }
+
+    $today = (Get-Date).Date
+    $isDirty = $false
+
+    for ($i = 0; $i -lt $rules.Count; $i++) {
+        $rule = $rules[$i]
+        if ($rule.PSObject.Properties['IsActive'] -and -not $rule.IsActive) { continue }
+        if (-not $rule.PSObject.Properties['Type']) { $rule | Add-Member -MemberType NoteProperty -Name 'Type' -Value 'Task' -Force }
+        if (-not $rule.PSObject.Properties['NextRunDate'] -or [string]::IsNullOrEmpty($rule.NextRunDate)) { $rule | Add-Member -MemberType NoteProperty -Name 'NextRunDate' -Value $today.ToString("yyyy-MM-dd") -Force }
+        if (-not $rule.PSObject.Properties['TheoreticalDate']) { $rule | Add-Member -MemberType NoteProperty -Name 'TheoreticalDate' -Value $rule.NextRunDate -Force }
+
+        # --- 新しいトリガーモードの処理 ---
+        if ($rule.TriggerModes) {
+            # 矛盾回避: 完了起点(OnCompletion)の場合、スケジュールベースの自動生成(PreGeneration/OnExpiration)は実行しない
+            if ($rule.TriggerModes -contains "OnCompletion") {
+                continue
+            }
+
+            $nextRunDate = try { [datetime]$rule.NextRunDate } catch { $null }
+            if (-not $nextRunDate) { continue }
+
+            $shouldGenerate = $false
+
+            # Trigger 1: PreGeneration (事前生成)
+            if ($rule.TriggerModes -contains "PreGeneration") {
+                $preGenDays = if ($rule.PreGenDays) { [int]$rule.PreGenDays } else { 0 }
+                $genDate = $nextRunDate.AddDays(-$preGenDays)
+                if ($today -ge $genDate.Date) {
+                    $shouldGenerate = $true
+                }
+            }
+            
+            # Trigger 2: OnExpiration (期限超過)
+            if (-not $shouldGenerate -and $rule.TriggerModes -contains "OnExpiration") {
+                if ($today -gt $nextRunDate.Date) {
+                    $shouldGenerate = $true
+                }
+            }
+
+            if ($shouldGenerate) {
+                # 生成対象の理論上の日付を取得
+                $targetDate = if ($rule.TheoreticalDate) { [datetime]$rule.TheoreticalDate } else { $nextRunDate }
+                
+                # ルールが期限切れの場合 (理論上の日付が過去になっている)、今日を基準に次に生成すべき日を再計算する
+                if ($targetDate.Date -lt $today) {
+                     $baseForNextCalc = $today
+                     $shift = if ($rule.WeekendShift) { $rule.WeekendShift } else { "None" }
+                     $hShift = if ($rule.HolidayShift) { $rule.HolidayShift } else { "None" }
+                     $interval = if ($rule.IntervalDays) { [int]$rule.IntervalDays } else { 1 }
+                     $unit = if ($rule.IntervalUnit) { $rule.IntervalUnit } else { "Day" }
+                     
+                     # 今日以降で最も近い次の予定日を計算
+                     $nextOccurrence = Get-NextRecurringDate -BaseDate $baseForNextCalc -Frequency $rule.Frequency -Params $rule.Params -WeekendShift $shift -HolidayShift $hShift -IntervalDays $interval -IntervalUnit $unit
+                     
+                     # 生成対象の日付を、計算された未来の日付に更新
+                     $targetDate = $nextOccurrence.TheoreticalDate
+                }
+                
+                $calcResult = Invoke-ItemGeneration -rule $rule -baseDateForCalc $targetDate -isInteractive $false
+                
+                if ($calcResult) {
+                    $rule.NextRunDate = $calcResult.ActualDate.ToString("yyyy-MM-dd")
+                    $rule.TheoreticalDate = $calcResult.TheoreticalDate.ToString("yyyy-MM-dd")
+                    $isDirty = $true
+                }
+            }
+            continue
+        }
+
+        # --- 旧方式 (Frequencyベース) の処理 ---
+        $nextRunDate = [datetime]$rule.NextRunDate
+        if ($nextRunDate.Date -le $today) {
+            # 計算基準日はTheoreticalDateを使用
+            $targetDate = if ($rule.TheoreticalDate) { [datetime]$rule.TheoreticalDate } else { $nextRunDate }
+            
+            # 共通生成関数を使用
+            $calcResult = Invoke-ItemGeneration -rule $rule -baseDateForCalc $targetDate -isInteractive $false
+            
+            # LastGeneratedDateの更新
+            if (-not $rule.PSObject.Properties['LastGeneratedDate']) {
+                $rule | Add-Member -MemberType NoteProperty -Name 'LastGeneratedDate' -Value "" -Force
+            }
+            $rule.LastGeneratedDate = $today.ToString("yyyy-MM-dd")
+
+            if ($calcResult) {
+                $rule.NextRunDate = $calcResult.ActualDate.ToString("yyyy-MM-dd")
+                $rule.TheoreticalDate = $calcResult.TheoreticalDate.ToString("yyyy-MM-dd")
+            }
+            
+            $isDirty = $true
+        }
+    }
+
+    if ($isDirty) {
+        Save-DataFile -filePath $script:RecurringRulesFile -dataObject $rules
+        Write-TasksToCsv -filePath $script:TasksFile -data $script:AllTasks
+        Save-DataFile -filePath $script:ProjectsFile -dataObject $script:Projects
+        Save-Events
+    }
 }
