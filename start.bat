@@ -1,1 +1,0 @@
-powershell.exe -ExecutionPolicy Bypass -File "%~dp0\task_manager_main.ps1"

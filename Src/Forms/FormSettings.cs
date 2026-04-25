@@ -1,0 +1,667 @@
+﻿﻿﻿using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Windows.Forms;
+using TaskManager.Models;
+using System.Web.Script.Serialization;
+using TaskManager.Services;
+using System.Linq;
+
+namespace TaskManager.Forms
+{
+    public class FormSettings : Form
+    {
+        public class ComboItem
+        {
+            public string Text { get; set; }
+            public string Value { get; set; }
+            public override string ToString() { return Text; }
+        }
+
+        private AppSettings _settings;
+        public AppSettings ResultSettings { get; private set; }
+
+        private TabControl tabControl;
+        
+        // General
+        private CheckBox chkRunAtStartup, chkMinimizeToTray, chkAlwaysOnTop, chkEnableSoundEffects;
+        private TextBox txtPasscode;
+        private TrackBar tbOpacity;
+        private NumericUpDown numIdleTimeout, numLongTask;
+        private CheckBox chkRememberWindowSize;
+        private Button btnResetWindowSize;
+        private NumericUpDown numWindowWidth, numWindowHeight, numMainSplitter, numCalendarSplitter, numCalendarLeftSplitter, numFilesSplitter;
+        private Dictionary<string, NumericUpDown[]> subWindowSizeControls = new Dictionary<string, NumericUpDown[]>();
+
+        // View
+        private ComboBox cmbStartupView, cmbDateFormat, cmbWeekStart, cmbOverlap;
+        private NumericUpDown numDayStartHour, numTimelineStart, numTimelineEnd, numEventNotify;
+        private CheckBox chkColorWeekend, chkShowTooltips, chkEventNotify, chkDarkMode, chkColorVisionSupport;
+
+        // Task
+        private ComboBox cmbListDensity, cmbDefaultSort, cmbDblClick, cmbNotifyStyle, cmbDefaultPriority, cmbGlobalNotify;
+        private CheckBox chkShowStrikethrough, chkShowKanbanDone, chkShowIcons;
+        private NumericUpDown numAlertRed, numAlertYellow, numDueOffset, numNotifyDays;
+
+        // Data
+        private TextBox txtBackupPath;
+        private Button btnBrowseBackup;
+        private NumericUpDown numAutoArchive, numWarnPercent, numPomodoro, numRetention, numProjArchive;
+        private CheckBox chkArchiveOnProjComp, chkArchiveOnTaskComp;
+        private CheckedListBox clbExcludeStatuses;
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        public FormSettings(AppSettings currentSettings)
+        {
+            // ディープコピーしてキャンセル時に元の設定を汚さないようにする
+            var serializer = new JavaScriptSerializer();
+            _settings = serializer.Deserialize<AppSettings>(serializer.Serialize(currentSettings));
+            InitializeComponent();
+            LoadData();
+
+            // ウィンドウサイズの自由変更と記憶を有効化 (保存は閉じた後に FormMain が行うため Action は不要)
+            ThemeManager.EnableDynamicResizing(this, _settings);
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            bool isDark = _settings != null && _settings.IsDarkMode; // 💡 設定から正確に取得
+
+            try {
+                int useImmersiveDarkMode = isDark ? 1 : 0;
+                DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
+                DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
+            }
+            catch { }
+
+            // フォーム全体の背景色を設定
+            this.BackColor = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
+
+            // 2. タブ内の文字が消える問題の修正
+            FixThemeRecursively(this, isDark);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            // ウィンドウサイズが変更されたら、配置タブの入力欄の数値も自動で同期させる
+            if (subWindowSizeControls != null && subWindowSizeControls.ContainsKey("FormSettings"))
+            {
+                try
+                {
+                    subWindowSizeControls["FormSettings"][0].Value = Math.Max(subWindowSizeControls["FormSettings"][0].Minimum, this.Width);
+                    subWindowSizeControls["FormSettings"][1].Value = Math.Max(subWindowSizeControls["FormSettings"][1].Minimum, this.Height);
+                }
+                catch { }
+            }
+        }
+
+        private void FixThemeRecursively(Control parent, bool isDark)
+        {
+            Color formBg = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
+            Color surfaceBg = isDark ? Color.FromArgb(30, 30, 30) : SystemColors.Window;
+            Color fg = isDark ? Color.White : SystemColors.ControlText;
+
+            foreach (Control c in parent.Controls)
+            {
+                // 背景色の設定
+                if (c is TabPage) c.BackColor = surfaceBg;
+                else if (c is Panel || c is GroupBox) c.BackColor = formBg;
+                else if (c is TextBox || c is NumericUpDown || c is ComboBox || c is CheckedListBox) {
+                    c.BackColor = surfaceBg; c.ForeColor = fg;
+                }
+                else if (c is Button) {
+                    var btn = (Button)c;
+                    btn.FlatStyle = FlatStyle.Flat;
+                    btn.FlatAppearance.BorderColor = isDark ? Color.FromArgb(80, 80, 80) : Color.DarkGray;
+                    btn.BackColor = isDark ? Color.FromArgb(60, 60, 65) : SystemColors.Control;
+                    btn.ForeColor = (btn.ForeColor == Color.Red && isDark) ? Color.LightCoral : fg;
+                }
+
+                // 文字色の設定
+                if (c is Label || c is CheckBox || c is RadioButton || c is GroupBox || c is Panel || c is TabPage) c.ForeColor = fg;
+
+                if (c.HasChildren) FixThemeRecursively(c, isDark);
+            }
+        }
+
+        private void InitializeComponent()
+        {
+            this.Text = "全体設定";
+            this.Size = new Size(620, 850);
+            this.StartPosition = FormStartPosition.CenterParent;
+            this.MinimumSize = new Size(620, 850);
+
+            // --- Top Panel ---
+            var topPanel = new Panel     { Dock = DockStyle.Top, Height = 45 };
+            var flowTop = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(5, 8, 15, 5) };
+            var btnCancelTop = new Button { Text = "キャンセル", Size = new Size(90, 30), DialogResult = DialogResult.Cancel };
+            var btnSaveTop = new Button { Text = "設定を反映して閉じる", Size = new Size(130, 30) };
+            btnSaveTop.Click += ButtonSave_Click;
+            flowTop.Controls.AddRange(new Control[] { btnCancelTop, btnSaveTop });
+            topPanel.Controls.Add(flowTop);
+            this.Controls.Add(topPanel);
+
+            // --- Bottom Panel ---
+            var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 50 };
+            var btnBackupSave = new Button { Text = "設定の保存...", Location = new Point(15, 10), Size = new Size(110, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
+            btnBackupSave.Click += BtnBackupSave_Click;
+            var btnCancel = new Button { Text = "キャンセル", Location = new Point(450, 10), Size = new Size(90, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Right, DialogResult = DialogResult.Cancel };
+            var btnSave = new Button { Text = "設定を反映して閉じる", Location = new Point(310, 10), Size = new Size(130, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            btnSave.Click += ButtonSave_Click;
+            bottomPanel.Controls.AddRange(new Control[] { btnBackupSave, btnSave, btnCancel });
+            this.Controls.Add(bottomPanel);
+            
+            // --- Tab Control ---
+            tabControl = new TabControl { 
+                Dock = DockStyle.Fill, 
+                DrawMode = TabDrawMode.OwnerDrawFixed 
+            };
+            tabControl.DrawItem += TabControl_DrawItem;
+            this.Controls.Add(tabControl);
+            
+            // Dockの挙動を正しくするため、TabControlを最前面(Zオーダー0)にして残りの領域を埋める
+            tabControl.BringToFront();
+            
+            this.AcceptButton = btnSave;
+            this.CancelButton = btnCancel;
+
+            // --- 1. General Tab ---
+            var tabGeneral = new TabPage("一般・動作");
+            tabControl.TabPages.Add(tabGeneral);
+            int y = 15;
+            chkRunAtStartup = new CheckBox { Text = "Windows起動時に自動実行する", AutoSize = true };
+            AddField(tabGeneral, ref y, null, chkRunAtStartup);
+            chkMinimizeToTray = new CheckBox { Text = "閉じるボタンで最小化 (タスクトレイへ)", AutoSize = true };
+            AddField(tabGeneral, ref y, null, chkMinimizeToTray);
+            chkAlwaysOnTop = new CheckBox { Text = "ウィンドウを常に手前に表示", AutoSize = true };
+            AddField(tabGeneral, ref y, null, chkAlwaysOnTop);
+            chkEnableSoundEffects = new CheckBox { Text = "完了時に効果音を鳴らす", AutoSize = true };
+            AddField(tabGeneral, ref y, null, chkEnableSoundEffects);
+
+            txtPasscode = new TextBox { Width = 150 };
+            AddField(tabGeneral, ref y, "起動パスコード (空欄で無効):", txtPasscode);
+
+            numIdleTimeout = new NumericUpDown { Minimum = 1, Maximum = 120, Width = 60 };
+            AddField(tabGeneral, ref y, "非アクティブ判定 (分):", numIdleTimeout);
+
+            numLongTask = new NumericUpDown { Minimum = 0, Maximum = 1440, Width = 60 };
+            AddField(tabGeneral, ref y, "長時間作業の警告 (分):", numLongTask);
+
+            // --- 2. View & Calendar Tab ---
+            var tabView = new TabPage("表示・カレンダー");
+            tabControl.TabPages.Add(tabView);
+            y = 15;
+            chkDarkMode = new CheckBox { Text = "ダークモードを有効にする", AutoSize = true };
+            chkColorVisionSupport = new CheckBox { Text = "色覚サポートモードを有効にする (見分けやすい配色)", AutoSize = true };
+            AddField(tabView, ref y, null, chkDarkMode, null, chkColorVisionSupport);
+
+            cmbStartupView = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120, DisplayMember = "Text", ValueMember = "Value" };
+            cmbStartupView.DataSource = new[] { new ComboItem { Text = "リスト", Value = "List" }, new ComboItem { Text = "カンバン", Value = "Kanban" }, new ComboItem { Text = "カレンダー", Value = "Calendar" } };
+            cmbDateFormat = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
+            cmbDateFormat.Items.AddRange(new[] { "yyyy/MM/dd", "MM/dd", "yyyy-MM-dd" });
+            AddField(tabView, ref y, "起動時の画面:", cmbStartupView, "日付形式:", cmbDateFormat);
+
+            numDayStartHour = new NumericUpDown { Minimum = 0, Maximum = 23, Width = 60 };
+            cmbWeekStart = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100 };
+            cmbWeekStart.Items.AddRange(new[] { "日曜", "月曜" });
+            AddField(tabView, ref y, "日付の境界線 (時):", numDayStartHour, "週の始まり:", cmbWeekStart);
+
+            chkColorWeekend = new CheckBox { Text = "カレンダーの土日を色分けする", AutoSize = true };
+            chkShowTooltips = new CheckBox { Text = "ツールチップを表示する", AutoSize = true };
+            AddField(tabView, ref y, null, chkColorWeekend, null, chkShowTooltips);
+
+            numTimelineStart = new NumericUpDown { Minimum = 0, Maximum = 23, Width = 50 };
+            numTimelineEnd = new NumericUpDown { Minimum = 1, Maximum = 24, Width = 50 };
+            AddField(tabView, ref y, "タイムライン表示範囲 (時):", numTimelineStart, "～", numTimelineEnd);
+
+            cmbOverlap = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150, DisplayMember = "Text", ValueMember = "Value" };
+            cmbOverlap.DataSource = new[] { new ComboItem { Text = "エラーを表示 (中断)", Value = "Error" }, new ComboItem { Text = "上書き (修正)", Value = "Overwrite" } };
+            AddField(tabView, ref y, "時間記録の重複:", cmbOverlap);
+
+            chkEventNotify = new CheckBox { Text = "イベント通知有効", AutoSize = true };
+            numEventNotify = new NumericUpDown { Minimum = 0, Maximum = 1440, Width = 60 };
+            AddField(tabView, ref y, null, chkEventNotify, "通知 (分前):", numEventNotify);
+
+            // --- 3. Task & List Tab ---
+            var tabTask = new TabPage("タスク操作・リスト");
+            tabControl.TabPages.Add(tabTask);
+            y = 15;
+            cmbListDensity = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100, DisplayMember = "Text", ValueMember = "Value" };
+            cmbListDensity.DataSource = new[] { new ComboItem { Text = "狭い", Value = "Compact" }, new ComboItem { Text = "標準", Value = "Standard" }, new ComboItem { Text = "広い", Value = "Relaxed" } };
+            chkShowStrikethrough = new CheckBox { Text = "完了タスク打ち消し線", AutoSize = true };
+            AddField(tabTask, ref y, "リスト行間:", cmbListDensity, null, chkShowStrikethrough);
+
+            chkShowKanbanDone = new CheckBox { Text = "カンバンの完了列表示", AutoSize = true };
+            chkShowIcons = new CheckBox { Text = "アイコン(⚠️等)を表示", AutoSize = true };
+            cmbDefaultSort = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100, DisplayMember = "Text", ValueMember = "Value" };
+            cmbDefaultSort.DataSource = new[] { new ComboItem { Text = "期日", Value = "DueDate" }, new ComboItem { Text = "優先度", Value = "Priority" }, new ComboItem { Text = "作成日", Value = "CreatedDate" } };
+            AddField(tabTask, ref y, null, chkShowKanbanDone, null, chkShowIcons);
+
+            AddField(tabTask, ref y, "デフォルト並び順:", cmbDefaultSort);
+
+            cmbDblClick = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100, DisplayMember = "Text", ValueMember = "Value" };
+            cmbDblClick.DataSource = new[] { new ComboItem { Text = "編集", Value = "Edit" }, new ComboItem { Text = "状態切替", Value = "ToggleStatus" } };
+            cmbNotifyStyle = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 100, DisplayMember = "Text", ValueMember = "Value" };
+            cmbNotifyStyle.DataSource = new[] { new ComboItem { Text = "ダイアログ", Value = "Dialog" }, new ComboItem { Text = "バルーン", Value = "Balloon" } };
+            AddField(tabTask, ref y, "ダブルクリック動作:", cmbDblClick, "通知スタイル:", cmbNotifyStyle);
+
+            numAlertRed = new NumericUpDown { Width = 50 };
+            numAlertYellow = new NumericUpDown { Width = 50 };
+            AddField(tabTask, ref y, "期限アラート (赤):", numAlertRed, "(黄):", numAlertYellow);
+
+            cmbDefaultPriority = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 60 };
+            cmbDefaultPriority.Items.AddRange(new[] { "高", "中", "低" });
+            numDueOffset = new NumericUpDown { Width = 50 };
+            AddField(tabTask, ref y, "新規タスク 優先度:", cmbDefaultPriority, "期限+日:", numDueOffset);
+
+            cmbGlobalNotify = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
+            cmbGlobalNotify.Items.AddRange(new[] { "通知しない", "当日", "1日前", "前の営業日", "3日前", "1週間前" });
+            numNotifyDays = new NumericUpDown { Minimum = 1, Maximum = 30, Width = 50 };
+            AddField(tabTask, ref y, "デフォルト通知:", cmbGlobalNotify, "ボタン表示期間:", numNotifyDays);
+
+            // --- 4. Data & Analysis Tab ---
+            var tabData = new TabPage("データ・分析");
+            tabControl.TabPages.Add(tabData);
+            y = 15;
+            txtBackupPath = new TextBox { Width = 200 };
+            btnBrowseBackup = new Button { Text = "...", Width = 30 };
+            btnBrowseBackup.Click += (s, e) => {
+                using (var fbd = new FolderBrowserDialog()) {
+                    if (fbd.ShowDialog() == DialogResult.OK) txtBackupPath.Text = fbd.SelectedPath;
+                }
+            };
+            tabData.Controls.Add(new Label { Text = "バックアップ保存先:", Location = new Point(15, y + 4), AutoSize = true });
+            txtBackupPath.Location = new Point(160, y);
+            tabData.Controls.Add(txtBackupPath);
+            btnBrowseBackup.Location = new Point(txtBackupPath.Right + 5, y - 1);
+            tabData.Controls.Add(btnBrowseBackup);
+            y += 35;
+
+            numAutoArchive = new NumericUpDown { Width = 60, Maximum = 3650 };
+            numWarnPercent = new NumericUpDown { Width = 60 };
+            AddField(tabData, ref y, "自動アーカイブ日数:", numAutoArchive, "警告基準 (%):", numWarnPercent);
+
+            numPomodoro = new NumericUpDown { Width = 60 };
+            numRetention = new NumericUpDown { Width = 60, Minimum = 1, Maximum = 3650 };
+            AddField(tabData, ref y, "ポモドーロ (分):", numPomodoro, "バックアップ保持 (日):", numRetention);
+
+            numProjArchive = new NumericUpDown { Width = 60, Maximum = 3650 };
+            AddField(tabData, ref y, "PJ自動アーカイブ (日):", numProjArchive);
+
+            chkArchiveOnProjComp = new CheckBox { Text = "PJ完了時にタスクを即時アーカイブ", AutoSize = true };
+            AddField(tabData, ref y, null, chkArchiveOnProjComp);
+
+            chkArchiveOnTaskComp = new CheckBox { Text = "タスク完了時に即時アーカイブ", AutoSize = true };
+            AddField(tabData, ref y, null, chkArchiveOnTaskComp);
+
+            clbExcludeStatuses = new CheckedListBox { Width = 350, Height = 80, CheckOnClick = true };
+            var statuses = new[] { "未実施", "保留", "実施中", "確認待ち", "完了済み" };
+            clbExcludeStatuses.Items.AddRange(statuses);
+            tabData.Controls.Add(new Label { Text = "リードタイム計算から除外するステータス:", Location = new Point(15, y), AutoSize = true });
+            y += 20;
+            clbExcludeStatuses.Location = new Point(15, y);
+            tabData.Controls.Add(clbExcludeStatuses);
+
+            // --- 5. Window & Layout Tab ---
+            var tabLayout = new TabPage("ウィンドウ・配置");
+            tabControl.TabPages.Add(tabLayout);
+            y = 15;
+
+            tbOpacity = new TrackBar { Minimum = 5, Maximum = 10, Width = 150, TickFrequency = 1 };
+            AddField(tabLayout, ref y, "ウィンドウ透明度:", tbOpacity);
+
+            y += 20; // 「ウィンドウ透明度」と「記憶する」の設定群の間に余白を追加してオフセット
+
+            chkRememberWindowSize = new CheckBox { Text = "終了時のウィンドウサイズと分割位置を記憶する", AutoSize = true };
+            btnResetWindowSize = new Button { Text = "初期値に戻す", Width = 100, Height = 25 };
+            btnResetWindowSize.Click += (s, e) => {
+                numWindowWidth.Value = 1280;
+                numWindowHeight.Value = 1024;
+                numMainSplitter.Value = 600;
+                numFilesSplitter.Value = 380;
+                numCalendarSplitter.Value = 840;
+                numCalendarLeftSplitter.Value = 400;
+                
+                if (subWindowSizeControls.ContainsKey("FormTaskInput")) { subWindowSizeControls["FormTaskInput"][0].Value = 450; subWindowSizeControls["FormTaskInput"][1].Value = 650; }
+                if (subWindowSizeControls.ContainsKey("FormProjectInput")) { subWindowSizeControls["FormProjectInput"][0].Value = 350; subWindowSizeControls["FormProjectInput"][1].Value = 230; }
+                if (subWindowSizeControls.ContainsKey("FormCategoryEditor")) { subWindowSizeControls["FormCategoryEditor"][0].Value = 650; subWindowSizeControls["FormCategoryEditor"][1].Value = 500; }
+                if (subWindowSizeControls.ContainsKey("FormTemplateEditor")) { subWindowSizeControls["FormTemplateEditor"][0].Value = 950; subWindowSizeControls["FormTemplateEditor"][1].Value = 600; }
+                if (subWindowSizeControls.ContainsKey("FormTemplateTaskInput")) { subWindowSizeControls["FormTemplateTaskInput"][0].Value = 350; subWindowSizeControls["FormTemplateTaskInput"][1].Value = 320; }
+                if (subWindowSizeControls.ContainsKey("FormArchiveView")) { subWindowSizeControls["FormArchiveView"][0].Value = 800; subWindowSizeControls["FormArchiveView"][1].Value = 600; }
+                if (subWindowSizeControls.ContainsKey("FormReport")) { subWindowSizeControls["FormReport"][0].Value = 1200; subWindowSizeControls["FormReport"][1].Value = 850; }
+                if (subWindowSizeControls.ContainsKey("FormSettings")) { subWindowSizeControls["FormSettings"][0].Value = 620; subWindowSizeControls["FormSettings"][1].Value = 850; }
+            };
+            AddField(tabLayout, ref y, null, chkRememberWindowSize, null, btnResetWindowSize);
+
+            y += 15; // 下の要素との間に余白（オフセット）を作る
+
+            numWindowWidth = new NumericUpDown { Minimum = 800, Maximum = 4000, Width = 60 };
+            numWindowHeight = new NumericUpDown { Minimum = 600, Maximum = 3000, Width = 60 };
+            AddField(tabLayout, ref y, "ウィンドウ幅:", numWindowWidth, "高さ:", numWindowHeight);
+
+            numMainSplitter = new NumericUpDown { Minimum = 100, Maximum = 3000, Width = 60 };
+            numFilesSplitter = new NumericUpDown { Minimum = 100, Maximum = 3000, Width = 60 };
+            AddField(tabLayout, ref y, "メイン画面 (上下):", numMainSplitter, "ファイル領域 (左右):", numFilesSplitter);
+
+            numCalendarSplitter = new NumericUpDown { Minimum = 100, Maximum = 3000, Width = 60 };
+            numCalendarLeftSplitter = new NumericUpDown { Minimum = 100, Maximum = 3000, Width = 60 };
+            AddField(tabLayout, ref y, "カレンダー (左右):", numCalendarSplitter, "カレンダー詳細 (上下):", numCalendarLeftSplitter);
+
+            y += 10;
+            tabLayout.Controls.Add(new Label { Text = "■ 各サブ画面のサイズ:", Location = new Point(15, y), AutoSize = true, Font = new Font("Meiryo UI", 9, FontStyle.Bold) });
+            y += 25;
+
+            string[] subForms = { "FormTaskInput|タスク編集", "FormProjectInput|PJ編集", "FormCategoryEditor|カテゴリ編集", "FormTemplateEditor|テンプレート", "FormTemplateTaskInput|テンプレタスク", "FormArchiveView|アーカイブ", "FormReport|レポート", "FormSettings|設定画面" };
+            foreach (var sf in subForms) {
+                var parts = sf.Split('|');
+                var key = parts[0];
+                
+                var numW = new NumericUpDown { Minimum = 300, Maximum = 4000, Width = 60 };
+                var numH = new NumericUpDown { Minimum = 200, Maximum = 3000, Width = 60 };
+                subWindowSizeControls[key] = new NumericUpDown[] { numW, numH };
+                AddField(tabLayout, ref y, parts[1] + " (幅):", numW, "(高さ):", numH);
+            }
+
+            // --- 6. Maintenance Tab ---
+            var tabMaint = new TabPage("メンテナンス");
+            tabControl.TabPages.Add(tabMaint);
+            y = 15;
+            
+            var btnOpenData = new Button { Text = "📂 データフォルダを開く", Location = new Point(15, y), Size = new Size(220, 30) };
+            btnOpenData.Click += (s, e) => { System.Diagnostics.Process.Start(AppDomain.CurrentDomain.BaseDirectory); };
+            tabMaint.Controls.Add(btnOpenData);
+            y += 40;
+
+            var btnResetPos = new Button { Text = "🔄 ウィンドウ位置リセット", Location = new Point(15, y), Size = new Size(220, 30) };
+            btnResetPos.Click += (s, e) => {
+                if (this.Owner != null) {
+                    this.Owner.StartPosition = FormStartPosition.Manual;
+                    this.Owner.Location = new Point(100, 100);
+                    MessageBox.Show("ウィンドウ位置をリセットしました。", "完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            };
+            tabMaint.Controls.Add(btnResetPos);
+            y += 40;
+
+            var btnResetConfig = new Button { Text = "⚠️ 設定を初期化", Location = new Point(15, y), Size = new Size(220, 30), ForeColor = Color.Red };
+            btnResetConfig.Click += (s, e) => {
+                if (MessageBox.Show("すべての設定を初期化します。よろしいですか？\n(データは削除されません)", "確認", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) {
+                    var ds = new DataService(AppDomain.CurrentDomain.BaseDirectory);
+                    if (System.IO.File.Exists(ds.SettingsFile)) System.IO.File.Delete(ds.SettingsFile);
+                    MessageBox.Show("設定を初期化しました。アプリを再起動してください。", "完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    Application.Exit();
+                }
+            };
+            tabMaint.Controls.Add(btnResetConfig);
+        }
+
+        private void TabControl_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            bool isDark = _settings != null && _settings.IsDarkMode;
+            if (e.Index < 0 || e.Index >= tabControl.TabPages.Count) return;
+            
+            var tabPage = tabControl.TabPages[e.Index];
+            var tabRect = tabControl.GetTabRect(e.Index);
+            var isSelected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+            
+            Color bgColor = isDark 
+                ? (isSelected ? Color.FromArgb(80, 80, 80) : Color.FromArgb(45, 45, 48)) 
+                : (isSelected ? Color.White : Color.FromArgb(240, 240, 240));
+                
+            Color textColor = isDark ? Color.White : Color.Black;
+            
+            using (var bgBrush = new SolidBrush(bgColor)) e.Graphics.FillRectangle(bgBrush, tabRect);
+            TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter;
+            TextRenderer.DrawText(e.Graphics, tabPage.Text, tabControl.Font, tabRect, textColor, flags);
+        }
+
+        private void AddField(Control parent, ref int y, string label, Control ctrl, string label2 = null, Control ctrl2 = null)
+        {
+            if (label != null) {
+                parent.Controls.Add(new Label { Text = label, Location = new Point(15, y + 4), AutoSize = true }); // テキストボックスと高さを揃える
+                ctrl.Location = new Point(160, y);
+            } else {
+                ctrl.Location = new Point(15, y);
+            }
+            parent.Controls.Add(ctrl);
+
+            if (ctrl2 != null) {
+                if (label2 != null) {
+                    parent.Controls.Add(new Label { Text = label2, Location = new Point(300, y + 4), AutoSize = true });
+                    ctrl2.Location = new Point(450, y);
+                } else {
+                    ctrl2.Location = new Point(300, y);
+                }
+                parent.Controls.Add(ctrl2);
+            }
+            y += 35;
+        }
+
+        private void LoadData()
+        {
+            try { chkRunAtStartup.Checked = _settings.RunAtStartup; } catch {}
+            try { chkMinimizeToTray.Checked = _settings.MinimizeToTray; } catch {}
+            try { chkAlwaysOnTop.Checked = _settings.AlwaysOnTop; } catch {}
+            try { chkEnableSoundEffects.Checked = _settings.EnableSoundEffects; } catch {}
+            try { txtPasscode.Text = _settings.Passcode; } catch {}
+            try { tbOpacity.Value = Math.Max(5, Math.Min(10, (int)(_settings.WindowOpacity * 10))); } catch { tbOpacity.Value = 10; }
+            try { numIdleTimeout.Value = Math.Max(1, _settings.IdleTimeoutMinutes); } catch { numIdleTimeout.Value = 5; }
+            try { numLongTask.Value = _settings.LongTaskNotificationMinutes; } catch { numLongTask.Value = 180; }
+
+            try { chkRememberWindowSize.Checked = _settings.RememberWindowSize; } catch { chkRememberWindowSize.Checked = true; }
+            try { numWindowWidth.Value = Math.Max(800, _settings.WindowWidth); } catch { numWindowWidth.Value = 1280; }
+            try { numWindowHeight.Value = Math.Max(600, _settings.WindowHeight); } catch { numWindowHeight.Value = 1024; }
+            try { numMainSplitter.Value = Math.Max(100, _settings.MainSplitterDistance); } catch { numMainSplitter.Value = 600; }
+            try { numFilesSplitter.Value = Math.Max(100, _settings.FilesSplitterDistance); } catch { numFilesSplitter.Value = 380; }
+            try { numCalendarSplitter.Value = Math.Max(100, _settings.CalendarSplitterDistance); } catch { numCalendarSplitter.Value = 840; }
+            try { numCalendarLeftSplitter.Value = Math.Max(100, _settings.CalendarLeftSplitterDistance); } catch { numCalendarLeftSplitter.Value = 400; }
+
+            if (_settings.WindowSizes != null) {
+                foreach (var key in subWindowSizeControls.Keys) {
+                    if (_settings.WindowSizes.ContainsKey(key)) {
+                        var parts = _settings.WindowSizes[key].Split(',');
+                        int w; int h; if (parts.Length >= 2 && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h)) {
+                            try { subWindowSizeControls[key][0].Value = Math.Max(300, w); } catch {}
+                            try { subWindowSizeControls[key][1].Value = Math.Max(200, h); } catch {}
+                        }
+                    } else {
+                        if (key == "FormTaskInput") { subWindowSizeControls[key][0].Value = 450; subWindowSizeControls[key][1].Value = 650; }
+                        if (key == "FormProjectInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 230; }
+                        if (key == "FormCategoryEditor") { subWindowSizeControls[key][0].Value = 650; subWindowSizeControls[key][1].Value = 500; }
+                        if (key == "FormTemplateEditor") { subWindowSizeControls[key][0].Value = 950; subWindowSizeControls[key][1].Value = 600; }
+                        if (key == "FormTemplateTaskInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 320; }
+                        if (key == "FormArchiveView") { subWindowSizeControls[key][0].Value = 800; subWindowSizeControls[key][1].Value = 600; }
+                        if (key == "FormReport") { subWindowSizeControls[key][0].Value = 1200; subWindowSizeControls[key][1].Value = 850; }
+                        if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 620; subWindowSizeControls[key][1].Value = 850; }
+                    }
+                }
+            } else {
+                foreach (var key in subWindowSizeControls.Keys) {
+                    if (key == "FormTaskInput") { subWindowSizeControls[key][0].Value = 450; subWindowSizeControls[key][1].Value = 650; }
+                    if (key == "FormProjectInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 230; }
+                    if (key == "FormCategoryEditor") { subWindowSizeControls[key][0].Value = 650; subWindowSizeControls[key][1].Value = 500; }
+                    if (key == "FormTemplateEditor") { subWindowSizeControls[key][0].Value = 950; subWindowSizeControls[key][1].Value = 600; }
+                    if (key == "FormTemplateTaskInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 320; }
+                    if (key == "FormArchiveView") { subWindowSizeControls[key][0].Value = 800; subWindowSizeControls[key][1].Value = 600; }
+                    if (key == "FormReport") { subWindowSizeControls[key][0].Value = 1200; subWindowSizeControls[key][1].Value = 850; }
+                    if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 620; subWindowSizeControls[key][1].Value = 850; }
+                }
+            }
+
+            try { chkDarkMode.Checked = _settings.IsDarkMode; } catch {}
+            try { chkColorVisionSupport.Checked = _settings.EnableColorVisionSupport; } catch {}
+            try { cmbStartupView.SelectedValue = _settings.StartupView ?? "List"; } catch { cmbStartupView.SelectedIndex = 0; }
+            try { cmbDateFormat.SelectedItem = _settings.DateFormat ?? "yyyy/MM/dd"; } catch { cmbDateFormat.SelectedIndex = 0; }
+            try { numDayStartHour.Value = _settings.DayStartHour; } catch { numDayStartHour.Value = 0; }
+            try { cmbWeekStart.SelectedIndex = _settings.CalendarWeekStart; } catch { cmbWeekStart.SelectedIndex = 0; }
+            try { chkColorWeekend.Checked = _settings.ColorWeekend; } catch { chkColorWeekend.Checked = true; }
+            try { chkShowTooltips.Checked = _settings.ShowTooltips; } catch { chkShowTooltips.Checked = true; }
+            try { numTimelineStart.Value = _settings.TimelineStartHour; } catch { numTimelineStart.Value = 8; }
+            try { numTimelineEnd.Value = _settings.TimelineEndHour; } catch { numTimelineEnd.Value = 24; }
+            try { cmbOverlap.SelectedValue = _settings.TimeLogOverlapBehavior ?? "Error"; } catch { cmbOverlap.SelectedIndex = 0; }
+            try { chkEventNotify.Checked = _settings.EventNotificationEnabled; } catch { chkEventNotify.Checked = true; }
+            try { numEventNotify.Value = _settings.EventNotificationMinutes; } catch { numEventNotify.Value = 15; }
+
+            try { cmbListDensity.SelectedValue = _settings.ListDensity ?? "Standard"; } catch { cmbListDensity.SelectedIndex = 1; }
+            try { chkShowStrikethrough.Checked = _settings.ShowStrikethrough; } catch { chkShowStrikethrough.Checked = true; }
+            try { chkShowKanbanDone.Checked = _settings.ShowKanbanDone; } catch { chkShowKanbanDone.Checked = true; }
+            try { chkShowIcons.Checked = _settings.ShowIcons; } catch { chkShowIcons.Checked = true; }
+            try { cmbDefaultSort.SelectedValue = _settings.DefaultSort ?? "DueDate"; } catch { cmbDefaultSort.SelectedIndex = 0; }
+            try { cmbDblClick.SelectedValue = _settings.DoubleClickAction ?? "Edit"; } catch { cmbDblClick.SelectedIndex = 0; }
+            try { cmbNotifyStyle.SelectedValue = _settings.NotificationStyle ?? "Dialog"; } catch { cmbNotifyStyle.SelectedIndex = 0; }
+            try { numAlertRed.Value = _settings.AlertDaysRed; } catch {}
+            try { numAlertYellow.Value = _settings.AlertDaysYellow; } catch {}
+            try { cmbDefaultPriority.SelectedItem = _settings.DefaultPriority ?? "中"; } catch { cmbDefaultPriority.SelectedIndex = 1; }
+            try { numDueOffset.Value = _settings.DefaultDueOffset; } catch {}
+            try { cmbGlobalNotify.SelectedItem = _settings.GlobalNotification ?? "当日"; } catch { cmbGlobalNotify.SelectedIndex = 1; }
+            try { numNotifyDays.Value = Math.Max(1, _settings.NotificationButtonDays); } catch { numNotifyDays.Value = 7; }
+
+            try { txtBackupPath.Text = _settings.BackupPath; } catch {}
+            try { numAutoArchive.Value = _settings.AutoArchiveDays; } catch { numAutoArchive.Value = 30; }
+            try { numWarnPercent.Value = _settings.AnalysisWarnPercent; } catch { numWarnPercent.Value = 40; }
+            try { numPomodoro.Value = _settings.PomodoroWorkMinutes; } catch { numPomodoro.Value = 25; }
+            try { numRetention.Value = Math.Max(1, _settings.BackupRetentionDays); } catch { numRetention.Value = 30; }
+            try { numProjArchive.Value = _settings.AutoArchiveProjectsDays; } catch { numProjArchive.Value = 60; }
+            try { chkArchiveOnProjComp.Checked = _settings.ArchiveTasksOnProjectCompletion; } catch {}
+            try { chkArchiveOnTaskComp.Checked = _settings.ArchiveTasksOnCompletion; } catch {}
+            
+            try { 
+                if (_settings.LeadTimeExcludeStatuses != null) {
+                    for (int i = 0; i < clbExcludeStatuses.Items.Count; i++) {
+                        if (_settings.LeadTimeExcludeStatuses.Contains(clbExcludeStatuses.Items[i].ToString())) {
+                            clbExcludeStatuses.SetItemChecked(i, true);
+                        }
+                    }
+                }
+            } catch {}
+        }
+
+        private void UpdateSettingsFromUI()
+        {
+            try { _settings.RunAtStartup = chkRunAtStartup.Checked; } catch {}
+            try { _settings.MinimizeToTray = chkMinimizeToTray.Checked; } catch {}
+            try { _settings.AlwaysOnTop = chkAlwaysOnTop.Checked; } catch {}
+            try { _settings.EnableSoundEffects = chkEnableSoundEffects.Checked; } catch {}
+            try { _settings.Passcode = txtPasscode.Text; } catch {}
+            try { _settings.WindowOpacity = tbOpacity.Value / 10.0; } catch {}
+            try { _settings.IdleTimeoutMinutes = (int)numIdleTimeout.Value; } catch {}
+            try { _settings.LongTaskNotificationMinutes = (int)numLongTask.Value; } catch {}
+
+            try { _settings.RememberWindowSize = chkRememberWindowSize.Checked; } catch {}
+            try { _settings.WindowWidth = (int)numWindowWidth.Value; } catch {}
+            try { _settings.WindowHeight = (int)numWindowHeight.Value; } catch {}
+            try { _settings.MainSplitterDistance = (int)numMainSplitter.Value; } catch {}
+            try { _settings.FilesSplitterDistance = (int)numFilesSplitter.Value; } catch {}
+            try { _settings.CalendarSplitterDistance = (int)numCalendarSplitter.Value; } catch {}
+            try { _settings.CalendarLeftSplitterDistance = (int)numCalendarLeftSplitter.Value; } catch {}
+
+            try {
+                if (_settings.WindowSizes == null) _settings.WindowSizes = new Dictionary<string, string>();
+                foreach (var key in subWindowSizeControls.Keys) {
+                    int w = (int)subWindowSizeControls[key][0].Value;
+                    int h = (int)subWindowSizeControls[key][1].Value;
+                    string existing = _settings.WindowSizes.ContainsKey(key) ? _settings.WindowSizes[key] : "";
+                    var parts = existing.Split(',');
+                    string newVal = string.Format("{0},{1}", w, h);
+                    if (parts.Length > 2) newVal += "," + string.Join(",", parts.Skip(2)); // スプリッターの値を保護
+                    _settings.WindowSizes[key] = newVal;
+                }
+            } catch {}
+
+            try { _settings.IsDarkMode = chkDarkMode.Checked; } catch {}
+            try { _settings.EnableColorVisionSupport = chkColorVisionSupport.Checked; } catch {}
+            try { _settings.StartupView = cmbStartupView.SelectedValue != null ? cmbStartupView.SelectedValue.ToString() : "List"; } catch {}
+            try { _settings.DateFormat = cmbDateFormat.SelectedItem != null ? cmbDateFormat.SelectedItem.ToString() : "yyyy/MM/dd"; } catch {}
+            try { _settings.DayStartHour = (int)numDayStartHour.Value; } catch {}
+            try { _settings.CalendarWeekStart = cmbWeekStart.SelectedIndex; } catch {}
+            try { _settings.ColorWeekend = chkColorWeekend.Checked; } catch {}
+            try { _settings.ShowTooltips = chkShowTooltips.Checked; } catch {}
+            try { _settings.TimelineStartHour = (int)numTimelineStart.Value; } catch {}
+            try { _settings.TimelineEndHour = (int)numTimelineEnd.Value; } catch {}
+            try { _settings.TimeLogOverlapBehavior = cmbOverlap.SelectedValue != null ? cmbOverlap.SelectedValue.ToString() : "Error"; } catch {}
+            try { _settings.EventNotificationEnabled = chkEventNotify.Checked; } catch {}
+            try { _settings.EventNotificationMinutes = (int)numEventNotify.Value; } catch {}
+
+            try { _settings.ListDensity = cmbListDensity.SelectedValue != null ? cmbListDensity.SelectedValue.ToString() : "Standard"; } catch {}
+            try { _settings.ShowStrikethrough = chkShowStrikethrough.Checked; } catch {}
+            try { _settings.ShowKanbanDone = chkShowKanbanDone.Checked; } catch {}
+            try { _settings.ShowIcons = chkShowIcons.Checked; } catch {}
+            try { _settings.DefaultSort = cmbDefaultSort.SelectedValue != null ? cmbDefaultSort.SelectedValue.ToString() : "DueDate"; } catch {}
+            try { _settings.DoubleClickAction = cmbDblClick.SelectedValue != null ? cmbDblClick.SelectedValue.ToString() : "Edit"; } catch {}
+            try { _settings.NotificationStyle = cmbNotifyStyle.SelectedValue != null ? cmbNotifyStyle.SelectedValue.ToString() : "Dialog"; } catch {}
+            try { _settings.AlertDaysRed = (int)numAlertRed.Value; } catch {}
+            try { _settings.AlertDaysYellow = (int)numAlertYellow.Value; } catch {}
+            try { _settings.DefaultPriority = cmbDefaultPriority.SelectedItem != null ? cmbDefaultPriority.SelectedItem.ToString() : "中"; } catch {}
+            try { _settings.DefaultDueOffset = (int)numDueOffset.Value; } catch {}
+            try { _settings.GlobalNotification = cmbGlobalNotify.SelectedItem != null ? cmbGlobalNotify.SelectedItem.ToString() : "当日"; } catch {}
+            try { _settings.NotificationButtonDays = (int)numNotifyDays.Value; } catch {}
+
+            try { _settings.BackupPath = txtBackupPath.Text; } catch {}
+            try { _settings.AutoArchiveDays = (int)numAutoArchive.Value; } catch {}
+            try { _settings.AnalysisWarnPercent = (int)numWarnPercent.Value; } catch {}
+            try { _settings.PomodoroWorkMinutes = (int)numPomodoro.Value; } catch {}
+            try { _settings.BackupRetentionDays = (int)numRetention.Value; } catch {}
+            try { _settings.AutoArchiveProjectsDays = (int)numProjArchive.Value; } catch {}
+            try { _settings.ArchiveTasksOnProjectCompletion = chkArchiveOnProjComp.Checked; } catch {}
+            try { _settings.ArchiveTasksOnCompletion = chkArchiveOnTaskComp.Checked; } catch {}
+            
+            try {
+                var excludes = new List<string>();
+                foreach (var item in clbExcludeStatuses.CheckedItems) excludes.Add(item.ToString());
+                _settings.LeadTimeExcludeStatuses = excludes;
+            } catch {}
+        }
+
+        private void ButtonSave_Click(object sender, EventArgs e)
+        {
+            if (numTimelineStart.Value >= numTimelineEnd.Value)
+            {
+                MessageBox.Show("タイムラインの終了時刻は開始時刻より後に設定してください。", "設定エラー", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            UpdateSettingsFromUI();
+
+            // 💡 閉じる直前に、手入力された「設定画面自身」のサイズを実際のウィンドウに適用する。
+            // これにより、閉じる瞬間の自動保存(FormClosing)で手入力した値が古いサイズで上書きされるのを防ぎます。
+            if (_settings.WindowSizes != null && _settings.WindowSizes.ContainsKey("FormSettings"))
+            {
+                var parts = _settings.WindowSizes["FormSettings"].Split(',');
+                int w; int h; if (parts.Length >= 2 && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h))
+                {
+                    this.Width = Math.Max(this.MinimumSize.Width > 0 ? this.MinimumSize.Width : 300, w);
+                    this.Height = Math.Max(this.MinimumSize.Height > 0 ? this.MinimumSize.Height : 200, h);
+                }
+            }
+
+            ResultSettings = _settings;
+            this.DialogResult = DialogResult.OK;
+            this.Close();
+        }
+
+        private void BtnBackupSave_Click(object sender, EventArgs e)
+        {
+            UpdateSettingsFromUI();
+            using (var sfd = new SaveFileDialog { Filter = "JSONファイル|*.json", FileName = "settings_backup.json", Title = "設定の保存" })
+            {
+                if (sfd.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        var serializer = new JavaScriptSerializer();
+                        System.IO.File.WriteAllText(sfd.FileName, serializer.Serialize(_settings), System.Text.Encoding.UTF8);
+                        MessageBox.Show("設定を保存しました。", "完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("保存に失敗しました:\n" + ex.Message, "エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+            }
+        }
+    }
+}

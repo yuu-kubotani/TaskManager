@@ -1,0 +1,524 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
+using System.Windows.Forms;
+using TaskManager.Models;
+using TaskManager.Services;
+
+namespace TaskManager.Forms
+{
+    public class FormTaskInput : Form
+    {
+        private TaskItem _existingTask;
+        private List<ProjectItem> _projects;
+        private Dictionary<string, List<string>> _categories;
+
+        public TaskItem ResultTask { get; private set; }
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        [System.Runtime.InteropServices.DllImport("uxtheme.dll", ExactSpelling = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hwnd, string pszSubAppName, string pszSubIdList);
+
+        private const int DTM_GETMONTHCAL = 0x1008;
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wp, IntPtr lp);
+
+        private DataService _dataService;
+
+        private CheckBox chkRecurring;
+        private GroupBox grpRecurring;
+        private ComboBox cmbFreq;
+        private Panel pnlFreqOptions;
+        private CheckBox[] chkDays;
+        private NumericUpDown numDay;
+        private Label lblGeneratedInfo;
+
+        private ComboBox comboProject;
+        private DateTimePicker datePicker;
+        private ComboBox comboPriority;
+        private ComboBox comboStatus;
+        private ComboBox comboNotify;
+        private ComboBox comboCategory;
+        private ComboBox comboSubCategory;
+        private TextBox textTask;
+        private Button buttonSave;
+        private Button buttonCancel;
+
+        public FormTaskInput(TaskItem existingTask, string projectIDForNew, List<ProjectItem> projects, Dictionary<string, List<string>> categories)
+        {
+            _existingTask = existingTask;
+            _projects = projects ?? new List<ProjectItem>();
+            _categories = categories ?? new Dictionary<string, List<string>>();
+
+            _dataService = new DataService(AppDomain.CurrentDomain.BaseDirectory);
+
+            InitializeComponent();
+            LoadData(projectIDForNew);
+
+            // 💡 ウィンドウサイズの記憶と復元を有効化
+            var settings = _dataService.LoadSettings();
+            ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings));
+        }
+
+        private void InitializeComponent()
+        {
+            this.Text = _existingTask != null ? "タスクの編集" : "プロジェクト／タスクの新規追加";
+            this.ClientSize = new Size(410, 530);
+            this.StartPosition = FormStartPosition.CenterScreen;
+            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.MaximizeBox = false;
+            this.MinimizeBox = false;
+
+            // --- プロジェクト ---
+            var labelProject = new Label { Text = "プロジェクト：", Location = new Point(15, 15), AutoSize = true };
+            this.Controls.Add(labelProject);
+
+            comboProject = new ComboBox
+            {
+                Location = new Point(15, 35),
+                Size = new Size(380, 25),
+                DropDownStyle = ComboBoxStyle.DropDown,
+                DisplayMember = "ProjectName",
+                ValueMember = "ProjectID"
+            };
+            this.Controls.Add(comboProject);
+
+            // --- 期日 ---
+            var labelDue = new Label { Text = "期日：", Location = new Point(15, 75), AutoSize = true };
+            this.Controls.Add(labelDue);
+
+            datePicker = new DateTimePicker
+            {
+                ShowCheckBox = true,
+                Location = new Point(15, 95),
+                Width = 180,
+                Format = DateTimePickerFormat.Short
+            };
+            this.Controls.Add(datePicker);
+
+            // --- 優先度 ---
+            var labelPriority = new Label { Text = "優先度：", Location = new Point(215, 75), AutoSize = true };
+            this.Controls.Add(labelPriority);
+
+            comboPriority = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Location = new Point(215, 95),
+                Width = 180
+            };
+            comboPriority.Items.AddRange(new[] { "高", "中", "低" });
+            this.Controls.Add(comboPriority);
+
+            // --- 進捗度 ---
+            var labelStatus = new Label { Text = "進捗度：", Location = new Point(15, 135), AutoSize = true };
+            this.Controls.Add(labelStatus);
+
+            comboStatus = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Location = new Point(15, 155),
+                Width = 180
+            };
+            comboStatus.Items.AddRange(new[] { "未実施", "保留", "実施中", "確認待ち", "完了済み" });
+            this.Controls.Add(comboStatus);
+
+            // --- 通知設定 ---
+            var labelNotify = new Label { Text = "通知設定：", Location = new Point(215, 135), AutoSize = true };
+            this.Controls.Add(labelNotify);
+
+            comboNotify = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Location = new Point(215, 155),
+                Width = 180
+            };
+            comboNotify.Items.AddRange(new[] { "全体設定に従う", "通知しない", "当日", "1日前", "前の営業日", "3日前", "1週間前" });
+            this.Controls.Add(comboNotify);
+
+            // --- カテゴリ ---
+            var labelCategory = new Label { Text = "カテゴリ：", Location = new Point(15, 195), AutoSize = true };
+            this.Controls.Add(labelCategory);
+
+            comboCategory = new ComboBox
+            {
+                Location = new Point(15, 215),
+                Size = new Size(180, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            comboCategory.SelectedIndexChanged += ComboCategory_SelectedIndexChanged;
+            this.Controls.Add(comboCategory);
+
+            // --- サブカテゴリ ---
+            var labelSubCategory = new Label { Text = "サブカテゴリ：", Location = new Point(215, 195), AutoSize = true };
+            this.Controls.Add(labelSubCategory);
+
+            comboSubCategory = new ComboBox
+            {
+                Location = new Point(215, 215),
+                Size = new Size(180, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            this.Controls.Add(comboSubCategory);
+
+            // --- タスク内容 ---
+            var labelTask = new Label { Text = "タスク内容：", Location = new Point(15, 255), AutoSize = true };
+            this.Controls.Add(labelTask);
+
+            textTask = new TextBox
+            {
+                Multiline = true,
+                Location = new Point(15, 275),
+                Size = new Size(380, 80),
+                ScrollBars = ScrollBars.Vertical
+            };
+            this.Controls.Add(textTask);
+
+            // --- 定期設定 ---
+            lblGeneratedInfo = new Label { Text = "ℹ️ このタスクは定期実行ルールから生成されました", Location = new Point(15, 365), AutoSize = true, ForeColor = Color.Gray, Visible = false };
+            this.Controls.Add(lblGeneratedInfo);
+
+            chkRecurring = new CheckBox { Text = "このタスクを定期実行（ルーチン）にする", Location = new Point(15, 365), AutoSize = true };
+            this.Controls.Add(chkRecurring);
+
+            grpRecurring = new GroupBox { Text = "定期設定", Location = new Point(15, 390), Size = new Size(380, 85) };
+            this.Controls.Add(grpRecurring);
+
+            chkRecurring.CheckedChanged += (s, e) => { 
+                cmbFreq.Enabled = chkRecurring.Checked;
+                pnlFreqOptions.Enabled = chkRecurring.Checked;
+            };
+
+            grpRecurring.Controls.Add(new Label { Text = "頻度:", Location = new Point(10, 25), AutoSize = true });
+            cmbFreq = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(50, 22), Width = 100, Enabled = false };
+            cmbFreq.Items.AddRange(new[] { "毎日", "毎週", "毎月" });
+            cmbFreq.SelectedIndex = 0;
+            grpRecurring.Controls.Add(cmbFreq);
+
+            pnlFreqOptions = new Panel { Location = new Point(10, 55), Size = new Size(360, 25), Enabled = false };
+            grpRecurring.Controls.Add(pnlFreqOptions);
+
+            chkDays = new CheckBox[7];
+            string[] days = { "月", "火", "水", "木", "金", "土", "日" };
+            for (int i = 0; i < 7; i++) {
+                chkDays[i] = new CheckBox { Text = days[i], AutoSize = true, Location = new Point(i * 45, 2), Visible = false };
+                pnlFreqOptions.Controls.Add(chkDays[i]);
+            }
+
+            var lblDay = new Label { Text = "毎月:", Location = new Point(0, 5), AutoSize = true, Visible = false };
+            numDay = new NumericUpDown { Location = new Point(40, 2), Width = 50, Minimum = 1, Maximum = 31, Visible = false };
+            var lblDaySuffix = new Label { Text = "日", Location = new Point(95, 5), AutoSize = true, Visible = false };
+            pnlFreqOptions.Controls.AddRange(new Control[] { lblDay, numDay, lblDaySuffix });
+
+            cmbFreq.SelectedIndexChanged += (s, e) => {
+                string freq = cmbFreq.SelectedItem.ToString();
+                foreach (var c in chkDays) c.Visible = (freq == "毎週");
+                lblDay.Visible = numDay.Visible = lblDaySuffix.Visible = (freq == "毎月");
+            };
+
+            // --- ボタン ---
+            buttonSave = new Button { Text = "保存", Location = new Point(225, 485), Size = new Size(80, 30) };
+            buttonSave.Click += ButtonSave_Click;
+            this.Controls.Add(buttonSave);
+
+            buttonCancel = new Button { Text = "キャンセル", Location = new Point(315, 485), Size = new Size(80, 30) };
+            buttonCancel.Click += (s, e) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
+            this.Controls.Add(buttonCancel);
+
+            this.AcceptButton = buttonSave;
+            this.CancelButton = buttonCancel;
+            this.ActiveControl = textTask;
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            var settings = _dataService.LoadSettings();
+            bool isDark = settings != null && settings.IsDarkMode; // 💡 設定ファイルから正確にダークモード状態を取得
+
+            try {
+                int useImmersiveDarkMode = isDark ? 1 : 0;
+                DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
+                DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
+            }
+            catch { }
+
+            // フォーム全体の背景色を設定
+            this.BackColor = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
+
+            // 2. 定期設定など、グループボックス内の文字が消える問題の修正
+            FixThemeRecursively(this, isDark);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            var settings = _dataService.LoadSettings();
+            bool isDark = settings != null && settings.IsDarkMode;
+            try {
+                int useImmersiveDarkMode = isDark ? 1 : 0;
+                DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
+                DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
+            }
+            catch { }
+        }
+
+        private void FixThemeRecursively(Control parent, bool isDark)
+        {
+            Color formBg = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
+            Color surfaceBg = isDark ? Color.FromArgb(30, 30, 30) : SystemColors.Window;
+            Color fg = isDark ? Color.White : SystemColors.ControlText;
+
+            foreach (Control c in parent.Controls)
+            {
+                // 背景色の設定
+                if (c is Panel || c is GroupBox) c.BackColor = formBg;
+                else if (c is TextBox || c is NumericUpDown || c is ComboBox) {
+                    c.BackColor = surfaceBg; c.ForeColor = fg;
+                    var cmb = c as ComboBox;
+                    if (cmb != null) cmb.FlatStyle = FlatStyle.Flat;
+                    var txt = c as TextBox;
+                    if (txt != null) txt.BorderStyle = BorderStyle.FixedSingle;
+                }
+                else if (c is DateTimePicker) {
+                    var dtp = (DateTimePicker)c;
+                    dtp.BackColor = surfaceBg;
+                    dtp.ForeColor = fg;
+                    dtp.CalendarMonthBackground = surfaceBg;
+                    dtp.CalendarTitleBackColor = formBg;
+                    dtp.CalendarTitleForeColor = fg;
+                    dtp.CalendarTrailingForeColor = Color.Gray;
+                    if (isDark && Environment.OSVersion.Version.Major >= 10) {
+                        SetWindowTheme(dtp.Handle, "DarkMode_Explorer", null);
+                        // 💡 ドロップダウンされた月間カレンダー部分にもダークモードテーマを適用
+                        dtp.DropDown += (s, ev) => {
+                            IntPtr hMonthCal = SendMessage(dtp.Handle, DTM_GETMONTHCAL, IntPtr.Zero, IntPtr.Zero);
+                            if (hMonthCal != IntPtr.Zero) {
+                                SetWindowTheme(hMonthCal, "", ""); // ビジュアルスタイルを無効化
+                                int bgInt = ColorTranslator.ToWin32(surfaceBg);
+                                int fgInt = ColorTranslator.ToWin32(fg);
+                                SendMessage(hMonthCal, 0x1006, (IntPtr)0, (IntPtr)bgInt); // カレンダー背景
+                                SendMessage(hMonthCal, 0x1006, (IntPtr)1, (IntPtr)fgInt); // テキスト
+                                SendMessage(hMonthCal, 0x1006, (IntPtr)2, (IntPtr)ColorTranslator.ToWin32(formBg)); // タイトル背景
+                                SendMessage(hMonthCal, 0x1006, (IntPtr)3, (IntPtr)fgInt); // タイトルテキスト
+                                SendMessage(hMonthCal, 0x1006, (IntPtr)4, (IntPtr)bgInt); // 月間背景
+                                SendMessage(hMonthCal, 0x1006, (IntPtr)5, (IntPtr)ColorTranslator.ToWin32(Color.Gray)); // 前後月のテキスト
+                            }
+                        };
+                    } else {
+                        SetWindowTheme(dtp.Handle, "Explorer", null);
+                        dtp.DropDown += (s, ev) => {
+                            IntPtr hMonthCal = SendMessage(dtp.Handle, DTM_GETMONTHCAL, IntPtr.Zero, IntPtr.Zero);
+                            if (hMonthCal != IntPtr.Zero) {
+                                SetWindowTheme(hMonthCal, "Explorer", null);
+                            }
+                        };
+                    }
+                }
+                else if (c is Button) {
+                    var btn = (Button)c;
+                    btn.FlatStyle = FlatStyle.Flat;
+                    btn.FlatAppearance.BorderColor = isDark ? Color.FromArgb(80, 80, 80) : Color.DarkGray;
+                    btn.BackColor = isDark ? Color.FromArgb(60, 60, 65) : SystemColors.Control;
+                    btn.ForeColor = fg;
+                }
+
+                // 文字色の設定
+                if (c is Label || c is CheckBox || c is GroupBox || c is Panel) c.ForeColor = fg;
+
+                if (c.HasChildren) FixThemeRecursively(c, isDark);
+            }
+        }
+
+        private void LoadData(string projectIDForNew)
+        {
+            // カテゴリの初期化
+            comboCategory.Items.AddRange(_categories.Keys.ToArray());
+
+            // プロジェクトの初期化
+            foreach (var proj in _projects.OrderBy(p => p.ProjectName))
+            {
+                comboProject.Items.Add(proj);
+            }
+
+            if (_existingTask != null)
+            {
+                var selectedProj = _projects.FirstOrDefault(p => p.ProjectID == _existingTask.ProjectID);
+                if (selectedProj != null) comboProject.SelectedItem = selectedProj;
+
+                DateTime dueDate;
+                if (DateTime.TryParse(_existingTask.期日, out dueDate))
+                {
+                    datePicker.Value = dueDate;
+                    datePicker.Checked = true;
+                }
+                else
+                {
+                    datePicker.Checked = false;
+                }
+
+                comboPriority.SelectedItem = _existingTask.優先度;
+                comboStatus.SelectedItem = _existingTask.進捗度;
+                textTask.Text = _existingTask.タスク;
+                comboNotify.SelectedItem = _existingTask.通知設定;
+
+                if (!string.IsNullOrEmpty(_existingTask.カテゴリ) && comboCategory.Items.Contains(_existingTask.カテゴリ))
+                {
+                    comboCategory.SelectedItem = _existingTask.カテゴリ;
+                    if (!string.IsNullOrEmpty(_existingTask.サブカテゴリ) && comboSubCategory.Items.Contains(_existingTask.サブカテゴリ))
+                    {
+                        comboSubCategory.SelectedItem = _existingTask.サブカテゴリ;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(_existingTask.ParentRuleID)) {
+                    chkRecurring.Visible = false;
+                    grpRecurring.Visible = false;
+                    lblGeneratedInfo.Visible = true;
+                } else {
+                    var rules = _dataService.LoadFromJson<List<RecurringRule>>(_dataService.RecurringRulesFile, new List<RecurringRule>());
+                    var matchedRule = rules.FirstOrDefault(r => r.TaskName == _existingTask.タスク);
+                    if (matchedRule != null) {
+                        chkRecurring.Checked = true;
+                        cmbFreq.Enabled = true;
+                        pnlFreqOptions.Enabled = true;
+                        if (cmbFreq.Items.Contains(matchedRule.Frequency)) cmbFreq.SelectedItem = matchedRule.Frequency;
+                        if (matchedRule.Frequency == "毎週" && matchedRule.Params != null && matchedRule.Params.ContainsKey("Days")) {
+                            var dList = matchedRule.Params["Days"] as System.Collections.ArrayList;
+                            if (dList != null) {
+                                string[] days = { "月", "火", "水", "木", "金", "土", "日" };
+                                for (int i=0; i<7; i++) if (dList.Contains(days[i])) chkDays[i].Checked = true;
+                            }
+                        } else if (matchedRule.Frequency == "毎月" && matchedRule.Params != null && matchedRule.Params.ContainsKey("Day")) {
+                            int d;
+                            if (int.TryParse(matchedRule.Params["Day"].ToString(), out d)) numDay.Value = d;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(projectIDForNew))
+                {
+                    var selectedProj = _projects.FirstOrDefault(p => p.ProjectID == projectIDForNew);
+                    if (selectedProj != null) comboProject.SelectedItem = selectedProj;
+                }
+                datePicker.Value = DateTime.Today.AddDays(1);
+                datePicker.Checked = true;
+                comboPriority.SelectedIndex = 1; // 中
+                comboStatus.SelectedIndex = 0;   // 未実施
+                comboNotify.SelectedIndex = 0;   // 全体設定に従う
+            }
+        }
+
+        private void ComboCategory_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            comboSubCategory.Items.Clear();
+            string selectedCat = comboCategory.SelectedItem != null ? comboCategory.SelectedItem.ToString() : null;
+            if (!string.IsNullOrEmpty(selectedCat) && _categories.ContainsKey(selectedCat))
+            {
+                comboSubCategory.Items.AddRange(_categories[selectedCat].ToArray());
+            }
+        }
+
+        private async void ButtonSave_Click(object sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(comboProject.Text))
+            {
+                MessageBox.Show("プロジェクトは必須です。", "入力エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(textTask.Text))
+            {
+                MessageBox.Show("タスク内容は必須です。", "入力エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(comboCategory.Text))
+            {
+                MessageBox.Show("カテゴリは必須です。", "入力エラー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // 編集モードなら既存のオブジェクトを更新、新規なら新しいインスタンスを作成
+            ResultTask = _existingTask ?? new TaskItem { ID = Guid.NewGuid().ToString(), 保存日付 = DateTime.Today.ToString("yyyy-MM-dd") };
+            
+            ResultTask.タスク = textTask.Text.Trim();
+            ResultTask.期日 = datePicker.Checked ? datePicker.Value.ToString("yyyy-MM-dd") : "";
+            ResultTask.優先度 = comboPriority.SelectedItem != null ? comboPriority.SelectedItem.ToString() : null;
+            ResultTask.進捗度 = comboStatus.SelectedItem != null ? comboStatus.SelectedItem.ToString() : null;
+            ResultTask.通知設定 = comboNotify.SelectedItem != null ? comboNotify.SelectedItem.ToString() : null;
+            ResultTask.カテゴリ = comboCategory.SelectedItem != null ? comboCategory.SelectedItem.ToString() : null;
+            ResultTask.サブカテゴリ = comboSubCategory.SelectedItem != null ? comboSubCategory.SelectedItem.ToString() : "";
+
+            // プロジェクトIDの解決ロジック（自由入力による新規プロジェクト作成）
+            var selectedProj = comboProject.SelectedItem as ProjectItem;
+            if (selectedProj != null)
+            {
+                ResultTask.ProjectID = selectedProj.ProjectID;
+            }
+            else
+            {
+                // 新規プロジェクトが入力された場合、親フォーム側で Projects リストへの追加処理が必要です。
+                // 一時的に ProjectName プロパティに文字列として格納し、親フォームで解決するフラグとします。
+                ResultTask.ProjectName = comboProject.Text.Trim(); 
+                ResultTask.ProjectID = ""; // 親側で Guid 採番する
+            }
+
+            if (chkRecurring.Visible) {
+                var rules = _dataService.LoadFromJson<List<RecurringRule>>(_dataService.RecurringRulesFile, new List<RecurringRule>());
+                string originalTaskName = (_existingTask != null && _existingTask.タスク != null) ? _existingTask.タスク : "";
+                string newTaskName = ResultTask.タスク;
+                bool ruleUpdated = false;
+
+                if (chkRecurring.Checked) {
+                    var ruleParams = new Dictionary<string, object>();
+                    if (cmbFreq.SelectedItem.ToString() == "毎週") {
+                        var selectedDays = new List<string>();
+                        string[] days = { "月", "火", "水", "木", "金", "土", "日" };
+                        for (int i=0; i<7; i++) if (chkDays[i].Checked) selectedDays.Add(days[i]);
+                        ruleParams["Days"] = selectedDays;
+                    } else if (cmbFreq.SelectedItem.ToString() == "毎月") {
+                        ruleParams["Day"] = (int)numDay.Value;
+                    }
+
+                    var existingRule = !string.IsNullOrEmpty(originalTaskName) ? rules.FirstOrDefault(r => r.TaskName == originalTaskName) : null;
+                    if (existingRule != null) {
+                        existingRule.TaskName = newTaskName;
+                        existingRule.Frequency = cmbFreq.SelectedItem.ToString();
+                        existingRule.Params = ruleParams;
+                        existingRule.BaseTask = ResultTask;
+                    } else {
+                        var newRule = new RecurringRule {
+                            RuleID = Guid.NewGuid().ToString(), Type = "Task", TaskName = newTaskName, Frequency = cmbFreq.SelectedItem.ToString(),
+                            Params = ruleParams, BaseTask = ResultTask, IsActive = true, NextRunDate = DateTime.Today.ToString("yyyy-MM-dd"), TheoreticalDate = DateTime.Today.ToString("yyyy-MM-dd")
+                        };
+                        rules.Add(newRule);
+                    }
+                    ruleUpdated = true;
+                } else {
+                    if (!string.IsNullOrEmpty(originalTaskName)) {
+                        var ruleToDelete = rules.FirstOrDefault(r => r.TaskName == originalTaskName);
+                        if (ruleToDelete != null) { rules.Remove(ruleToDelete); ruleUpdated = true; }
+                    }
+                }
+                if (ruleUpdated) _dataService.SaveToJson(_dataService.RecurringRulesFile, rules);
+            }
+
+            await ShowSaveFeedbackAndClose("タスクを保存しました");
+        }
+
+        private async System.Threading.Tasks.Task ShowSaveFeedbackAndClose(string message)
+        {
+            foreach (Control c in this.Controls) { var b = c as Button; if (b != null) b.Enabled = false; }
+            var lbl = new Label { Text = message, Font = new Font("Meiryo UI", 9, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(180, 0, 0, 0), AutoSize = true, Padding = new Padding(10) };
+            this.Controls.Add(lbl);
+            lbl.Location = new Point((this.ClientSize.Width - lbl.Width) / 2, (this.ClientSize.Height - lbl.Height) / 2);
+            lbl.BringToFront();
+            await System.Threading.Tasks.Task.Delay(1200);
+            this.DialogResult = DialogResult.OK;
+            this.Close();
+        }
+    }
+}
