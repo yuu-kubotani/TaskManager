@@ -1,4 +1,4 @@
-﻿﻿﻿using System;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
@@ -22,6 +22,7 @@ namespace TaskManager.Forms
         public AppSettings ResultSettings { get; private set; }
 
         private TabControl tabControl;
+        private ToolTip _mainToolTip;
         
         // General
         private CheckBox chkRunAtStartup, chkMinimizeToTray, chkAlwaysOnTop, chkEnableSoundEffects;
@@ -50,9 +51,6 @@ namespace TaskManager.Forms
         private CheckBox chkArchiveOnProjComp, chkArchiveOnTaskComp;
         private CheckedListBox clbExcludeStatuses;
 
-        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
-        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
-
         public FormSettings(AppSettings currentSettings)
         {
             // ディープコピーしてキャンセル時に元の設定を汚さないようにする
@@ -61,27 +59,19 @@ namespace TaskManager.Forms
             InitializeComponent();
             LoadData();
 
-            // ウィンドウサイズの自由変更と記憶を有効化 (保存は閉じた後に FormMain が行うため Action は不要)
-            ThemeManager.EnableDynamicResizing(this, _settings);
+            // 💡 FormSettings自身のリサイズ処理が_settings.WindowWidth(メイン画面の幅)を誤って上書きするのを防ぐため、
+            // ここでの EnableDynamicResizing の呼び出しは無効化します。
+            // ThemeManager.EnableDynamicResizing(this, _settings);
         }
 
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
-            bool isDark = _settings != null && _settings.IsDarkMode; // 💡 設定から正確に取得
-
-            try {
-                int useImmersiveDarkMode = isDark ? 1 : 0;
-                DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
-                DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
-            }
-            catch { }
-
-            // フォーム全体の背景色を設定
-            this.BackColor = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
-
-            // 2. タブ内の文字が消える問題の修正
-            FixThemeRecursively(this, isDark);
+            bool isDark = _settings != null && _settings.IsDarkMode;
+            
+            // 重複していたAPI呼び出しと再帰的テーマ適用をThemeManagerに委譲
+            ThemeManager.ApplyDarkModeToWindow(this.Handle, isDark);
+            ThemeManager.ApplyTheme(this, isDark);
         }
 
         protected override void OnResize(EventArgs e)
@@ -96,35 +86,6 @@ namespace TaskManager.Forms
                     subWindowSizeControls["FormSettings"][1].Value = Math.Max(subWindowSizeControls["FormSettings"][1].Minimum, this.Height);
                 }
                 catch { }
-            }
-        }
-
-        private void FixThemeRecursively(Control parent, bool isDark)
-        {
-            Color formBg = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
-            Color surfaceBg = isDark ? Color.FromArgb(30, 30, 30) : SystemColors.Window;
-            Color fg = isDark ? Color.White : SystemColors.ControlText;
-
-            foreach (Control c in parent.Controls)
-            {
-                // 背景色の設定
-                if (c is TabPage) c.BackColor = surfaceBg;
-                else if (c is Panel || c is GroupBox) c.BackColor = formBg;
-                else if (c is TextBox || c is NumericUpDown || c is ComboBox || c is CheckedListBox) {
-                    c.BackColor = surfaceBg; c.ForeColor = fg;
-                }
-                else if (c is Button) {
-                    var btn = (Button)c;
-                    btn.FlatStyle = FlatStyle.Flat;
-                    btn.FlatAppearance.BorderColor = isDark ? Color.FromArgb(80, 80, 80) : Color.DarkGray;
-                    btn.BackColor = isDark ? Color.FromArgb(60, 60, 65) : SystemColors.Control;
-                    btn.ForeColor = (btn.ForeColor == Color.Red && isDark) ? Color.LightCoral : fg;
-                }
-
-                // 文字色の設定
-                if (c is Label || c is CheckBox || c is RadioButton || c is GroupBox || c is Panel || c is TabPage) c.ForeColor = fg;
-
-                if (c.HasChildren) FixThemeRecursively(c, isDark);
             }
         }
 
@@ -311,7 +272,7 @@ namespace TaskManager.Forms
             tabControl.TabPages.Add(tabLayout);
             y = 15;
 
-            tbOpacity = new TrackBar { Minimum = 5, Maximum = 10, Width = 150, TickFrequency = 1 };
+            tbOpacity = new TrackBar { Minimum = 5, Maximum = 10, Width = 150, TickFrequency = 1, LargeChange = 1 };
             AddField(tabLayout, ref y, "ウィンドウ透明度:", tbOpacity);
 
             y += 20; // 「ウィンドウ透明度」と「記憶する」の設定群の間に余白を追加してオフセット
@@ -397,6 +358,39 @@ namespace TaskManager.Forms
                 }
             };
             tabMaint.Controls.Add(btnResetConfig);
+            
+            SetupToolTips();
+        }
+
+        private void SetupToolTips()
+        {
+            _mainToolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 500, ReshowDelay = 100 };
+            
+            _mainToolTip.SetToolTip(chkRunAtStartup, "PCを起動した際、自動的にこのアプリを立ち上げます");
+            _mainToolTip.SetToolTip(chkMinimizeToTray, "ウィンドウ右上の「×」ボタンを押したとき、アプリを終了せずにタスクトレイに常駐させます");
+            _mainToolTip.SetToolTip(chkAlwaysOnTop, "このアプリのウィンドウを常に他のウィンドウより手前に表示し続けます");
+            _mainToolTip.SetToolTip(txtPasscode, "アプリを開く際にパスワードを要求します。空欄にすると無効になります");
+            _mainToolTip.SetToolTip(numIdleTimeout, "PCの操作がない状態が指定した時間(分)続くと、作業記録のタイマーを自動で一時停止します");
+            _mainToolTip.SetToolTip(numLongTask, "1つのタスクを休憩なしで連続して記録していると、指定した時間(分)で警告を出します");
+
+            _mainToolTip.SetToolTip(chkDarkMode, "アプリ全体の配色を暗いテーマに変更します");
+            _mainToolTip.SetToolTip(chkColorVisionSupport, "完了タスクに斜線を引くなど、色覚特性に配慮した視認性の高いデザインを使用します");
+            _mainToolTip.SetToolTip(cmbStartupView, "アプリを起動した際に最初に表示されるタブを選択します");
+            _mainToolTip.SetToolTip(cmbOverlap, "タイムライン上で時間記録が重なってしまった場合の処理方法です。\nエラー: 保存させない\n上書き: 前の記録を自動で短縮する");
+
+            _mainToolTip.SetToolTip(txtBackupPath, "自動・手動バックアップファイルの保存先フォルダです");
+            _mainToolTip.SetToolTip(numAutoArchive, "タスクが「完了済み」になってから指定した日数が経過すると、自動的にアーカイブ(過去データ)へ移動し、動作を軽くします");
+            _mainToolTip.SetToolTip(numProjArchive, "プロジェクト内の全タスクが完了してから指定した日数が経過すると、自動的にアーカイブへ移動します");
+            _mainToolTip.SetToolTip(chkArchiveOnProjComp, "チェックを入れると、プロジェクト全体が完了した瞬間に中のタスクをすべて即座にアーカイブします");
+
+            _mainToolTip.SetToolTip(chkShowIcons, "リストやカンバンで、優先度などの文字と一緒にアイコン（絵文字）を表示します");
+            _mainToolTip.SetToolTip(cmbNotifyStyle, "通知の表示方法です。\nダイアログ: 画面中央にポップアップ\nバルーン: タスクトレイから通知");
+
+            _mainToolTip.SetToolTip(chkRememberWindowSize, "アプリ終了時のウィンドウサイズと各分割線の位置を記憶し、次回起動時に復元します");
+            
+            chkShowTooltips.CheckedChanged += (s, e) => {
+                _mainToolTip.Active = chkShowTooltips.Checked;
+            };
         }
 
         private void TabControl_DrawItem(object sender, DrawItemEventArgs e)
@@ -538,6 +532,8 @@ namespace TaskManager.Forms
                     }
                 }
             } catch {}
+
+            if (_mainToolTip != null) _mainToolTip.Active = chkShowTooltips.Checked;
         }
 
         private void UpdateSettingsFromUI()
@@ -624,19 +620,20 @@ namespace TaskManager.Forms
                 return;
             }
 
-            UpdateSettingsFromUI();
-
             // 💡 閉じる直前に、手入力された「設定画面自身」のサイズを実際のウィンドウに適用する。
-            // これにより、閉じる瞬間の自動保存(FormClosing)で手入力した値が古いサイズで上書きされるのを防ぎます。
+            // ウィンドウサイズ変更時にResizeイベントが発火し予期せぬ値の上書きが発生するのを防ぐため、
+            // 先にウィンドウサイズを変更してから、UIの値をSettingsに保存します。
             if (_settings.WindowSizes != null && _settings.WindowSizes.ContainsKey("FormSettings"))
             {
                 var parts = _settings.WindowSizes["FormSettings"].Split(',');
                 int w; int h; if (parts.Length >= 2 && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h))
                 {
-                    this.Width = Math.Max(this.MinimumSize.Width > 0 ? this.MinimumSize.Width : 300, w);
-                    this.Height = Math.Max(this.MinimumSize.Height > 0 ? this.MinimumSize.Height : 200, h);
+                    this.Width = Math.Max(this.MinimumSize.Width, w);
+                    this.Height = Math.Max(this.MinimumSize.Height, h);
                 }
             }
+            
+            UpdateSettingsFromUI();
 
             ResultSettings = _settings;
             this.DialogResult = DialogResult.OK;

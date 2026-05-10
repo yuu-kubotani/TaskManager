@@ -28,3 +28,4 @@ C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\Src\Utils\DarkModeRendere
 C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\Src\Utils\NativeMethods.cs
 C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\Src\Utils\Prompt.cs
 C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\Src\Utils\ThemeManager.cs
+C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\Src\Utils\UIUtility.cs

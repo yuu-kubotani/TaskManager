@@ -1,10 +1,11 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using TaskManager.Models;
 using TaskManager.Services;
+using TaskManager.Utils;
 
 namespace TaskManager.Forms
 {
@@ -96,19 +97,7 @@ namespace TaskManager.Forms
                 NewTasks.Add(nt);
             }
 
-            await ShowSaveFeedbackAndClose("プロジェクトとタスクを作成しました");
-        }
-
-        private async System.Threading.Tasks.Task ShowSaveFeedbackAndClose(string message)
-        {
-            foreach (Control c in this.Controls) { var b = c as Button; if (b != null) b.Enabled = false; }
-            var lbl = new Label { Text = message, Font = new Font("Meiryo UI", 9, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(180, 0, 0, 0), AutoSize = true, Padding = new Padding(10) };
-            this.Controls.Add(lbl);
-            lbl.Location = new Point((this.ClientSize.Width - lbl.Width) / 2, (this.ClientSize.Height - lbl.Height) / 2);
-            lbl.BringToFront();
-            await System.Threading.Tasks.Task.Delay(1200);
-            this.DialogResult = DialogResult.OK;
-            this.Close();
+            await UIUtility.ShowSaveFeedbackAndClose(this, "プロジェクトとタスクを作成しました");
         }
     }
 }

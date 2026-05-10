@@ -3,6 +3,13 @@ using System.Collections.Generic;
 
 namespace TaskManager.Models
 {
+    public enum TimeDisplayMode
+    {
+        Simple,
+        Remaining,
+        ProgressBar
+    }
+
     public class WorkFile
     {
         public string DisplayName { get; set; }
@@ -35,6 +42,9 @@ namespace TaskManager.Models
         public string ParentRuleID { get; set; }
         public string ArchivedDate { get; set; } // アーカイブ用
         public string ProjectName { get; set; } // アーカイブ用
+        public double? TargetHours { get; set; }
+        public string StartedAt { get; set; }
+        public string CompletedAt { get; set; }
     }
 
     public class ProjectItem
@@ -57,6 +67,7 @@ namespace TaskManager.Models
         public bool AutoArchiveTasks { get; set; }
         public string ParentRuleID { get; set; }
         public string ArchivedDate { get; set; } // アーカイブ用
+        public double? TargetHours { get; set; }
     }
 
     public class EventItem

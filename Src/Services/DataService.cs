@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -27,6 +27,7 @@ namespace TaskManager.Services
         public string StatusLogsFile { get { return Path.Combine(DataFolder, "status_logs.json"); } }
         public string ArchivedTasksFile { get { return Path.Combine(DataFolder, "archived_tasks.csv"); } }
         public string ArchivedProjectsFile { get { return Path.Combine(DataFolder, "archived_projects.json"); } }
+        public string DailyReportsFile { get { return Path.Combine(DataFolder, "daily_reports.json"); } }
         public string BackupsFolder { get { return Path.Combine(_appRoot, "backup"); } }
 
         public DataService(string appRoot)
@@ -144,6 +145,12 @@ namespace TaskManager.Services
                                     catch { task.WorkFiles = new List<WorkFile>(); }
                                 }
                                 break;
+                            case "TargetHours":
+                                double targetHrs;
+                                if (double.TryParse(value, out targetHrs)) task.TargetHours = targetHrs;
+                                break;
+                            case "StartedAt": task.StartedAt = value; break;
+                            case "CompletedAt": task.CompletedAt = value; break;
                         }
                     }
                     tasks.Add(task);
@@ -160,7 +167,7 @@ namespace TaskManager.Services
         {
             try
             {
-                var headers = new[] { "ID", "ProjectID", "タスク", "進捗度", "優先度", "期日", "カテゴリ", "サブカテゴリ", "通知設定", "保存日付", "完了日", "TrackedTimeSeconds", "WorkFiles", "VisibleDate" };
+                var headers = new[] { "ID", "ProjectID", "タスク", "進捗度", "優先度", "期日", "カテゴリ", "サブカテゴリ", "通知設定", "保存日付", "完了日", "TrackedTimeSeconds", "WorkFiles", "VisibleDate", "TargetHours", "StartedAt", "CompletedAt" };
                 
                 using (var writer = new StreamWriter(filePath, false, Encoding.UTF8))
                 {
@@ -169,8 +176,9 @@ namespace TaskManager.Services
                     foreach (var task in tasks)
                     {
                         var workFilesJson = task.WorkFiles != null && task.WorkFiles.Any() ? _serializer.Serialize(task.WorkFiles) : "";
+                        var targetHrsStr = task.TargetHours.HasValue ? task.TargetHours.Value.ToString() : "";
 
-                        var values = new[] { task.ID, task.ProjectID, task.タスク, task.進捗度, task.優先度, task.期日, task.カテゴリ, task.サブカテゴリ, task.通知設定, task.保存日付, task.完了日, task.TrackedTimeSeconds.ToString(), workFilesJson, task.VisibleDate };
+                        var values = new[] { task.ID, task.ProjectID, task.タスク, task.進捗度, task.優先度, task.期日, task.カテゴリ, task.サブカテゴリ, task.通知設定, task.保存日付, task.完了日, task.TrackedTimeSeconds.ToString(), workFilesJson, task.VisibleDate, targetHrsStr, task.StartedAt, task.CompletedAt };
                         writer.WriteLine(string.Join(",", values.Select(v => EscapeCsv(v))));
                     }
                 }
@@ -185,7 +193,7 @@ namespace TaskManager.Services
         {
             try
             {
-                var headers = new[] { "ID", "ProjectID", "ProjectName", "タスク", "進捗度", "優先度", "期日", "カテゴリ", "サブカテゴリ", "通知設定", "保存日付", "完了日", "TrackedTimeSeconds", "WorkFiles", "ArchivedDate" };
+                var headers = new[] { "ID", "ProjectID", "ProjectName", "タスク", "進捗度", "優先度", "期日", "カテゴリ", "サブカテゴリ", "通知設定", "保存日付", "完了日", "TrackedTimeSeconds", "WorkFiles", "ArchivedDate", "TargetHours", "StartedAt", "CompletedAt" };
                 
                 using (var writer = new StreamWriter(ArchivedTasksFile, false, Encoding.UTF8))
                 {
@@ -194,7 +202,8 @@ namespace TaskManager.Services
                     foreach (var task in tasks)
                     {
                         var workFilesJson = task.WorkFiles != null && task.WorkFiles.Any() ? _serializer.Serialize(task.WorkFiles) : "";
-                        var values = new[] { task.ID, task.ProjectID, task.ProjectName, task.タスク, task.進捗度, task.優先度, task.期日, task.カテゴリ, task.サブカテゴリ, task.通知設定, task.保存日付, task.完了日, task.TrackedTimeSeconds.ToString(), workFilesJson, task.ArchivedDate };
+                        var targetHrsStr = task.TargetHours.HasValue ? task.TargetHours.Value.ToString() : "";
+                        var values = new[] { task.ID, task.ProjectID, task.ProjectName, task.タスク, task.進捗度, task.優先度, task.期日, task.カテゴリ, task.サブカテゴリ, task.通知設定, task.保存日付, task.完了日, task.TrackedTimeSeconds.ToString(), workFilesJson, task.ArchivedDate, targetHrsStr, task.StartedAt, task.CompletedAt };
                         writer.WriteLine(string.Join(",", values.Select(v => EscapeCsv(v))));
                     }
                 }
@@ -229,7 +238,7 @@ namespace TaskManager.Services
                 if (!Directory.Exists(backupSubFolder))
                 {
                     Directory.CreateDirectory(backupSubFolder);
-                    string[] filesToBackup = { TasksFile, ProjectsFile, CategoriesFile, TemplatesFile, SettingsFile, EventsFile, TimeLogsFile, StatusLogsFile, RecurringRulesFile };
+                    string[] filesToBackup = { TasksFile, ProjectsFile, CategoriesFile, TemplatesFile, SettingsFile, EventsFile, TimeLogsFile, StatusLogsFile, RecurringRulesFile, DailyReportsFile };
                     
                     foreach (string file in filesToBackup)
                     {
@@ -292,7 +301,7 @@ namespace TaskManager.Services
             string backupSubFolder = Path.Combine(backupRoot, timestamp);
             Directory.CreateDirectory(backupSubFolder);
 
-            string[] filesToBackup = { TasksFile, ProjectsFile, CategoriesFile, TemplatesFile, SettingsFile, EventsFile, TimeLogsFile, StatusLogsFile, RecurringRulesFile, ArchivedTasksFile, ArchivedProjectsFile };
+            string[] filesToBackup = { TasksFile, ProjectsFile, CategoriesFile, TemplatesFile, SettingsFile, EventsFile, TimeLogsFile, StatusLogsFile, RecurringRulesFile, ArchivedTasksFile, ArchivedProjectsFile, DailyReportsFile };
             foreach (string file in filesToBackup)
             {
                 if (File.Exists(file)) File.Copy(file, Path.Combine(backupSubFolder, Path.GetFileName(file)), true);
@@ -305,7 +314,7 @@ namespace TaskManager.Services
             string backupPath = Path.Combine(backupRoot, backupFolderName);
             if (!Directory.Exists(backupPath)) return false;
 
-            string[] filesToRestore = { TasksFile, ProjectsFile, CategoriesFile, TemplatesFile, SettingsFile, EventsFile, TimeLogsFile, StatusLogsFile, RecurringRulesFile, ArchivedTasksFile, ArchivedProjectsFile };
+            string[] filesToRestore = { TasksFile, ProjectsFile, CategoriesFile, TemplatesFile, SettingsFile, EventsFile, TimeLogsFile, StatusLogsFile, RecurringRulesFile, ArchivedTasksFile, ArchivedProjectsFile, DailyReportsFile };
             bool restored = false;
             foreach (string dest in filesToRestore)
             {
@@ -329,6 +338,28 @@ namespace TaskManager.Services
             dirs.Sort();
             dirs.Reverse();
             return dirs;
+        }
+
+        public Dictionary<string, string> GetHolidays()
+        {
+            string path = Path.Combine(_appRoot, "holidays.json");
+            if (File.Exists(path))
+            {
+                try
+                {
+                    var loaded = LoadFromJson<Dictionary<string, string>>(path, new Dictionary<string, string>());
+                    if (loaded != null && loaded.Count > 0) return loaded;
+                }
+                catch { }
+            }
+
+            return new Dictionary<string, string> {
+                { "2026-01-01", "元日" }, { "2026-01-12", "成人の日" }, { "2026-02-11", "建国記念の日" }, { "2026-02-23", "天皇誕生日" },
+                { "2026-03-20", "春分の日" }, { "2026-04-29", "昭和の日" }, { "2026-05-03", "憲法記念日" }, { "2026-05-04", "みどりの日" },
+                { "2026-05-05", "こどもの日" }, { "2026-05-06", "振替休日" }, { "2026-07-20", "海の日" }, { "2026-08-11", "山の日" },
+                { "2026-09-21", "敬老の日" }, { "2026-09-22", "国民の休日" }, { "2026-09-23", "秋分の日" }, { "2026-10-12", "スポーツの日" },
+                { "2026-11-03", "文化の日" }, { "2026-11-23", "勤労感謝の日" }
+            };
         }
     }
 }

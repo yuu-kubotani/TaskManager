@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -116,10 +116,11 @@ namespace TaskManager.Forms
                             DateTime dt;
                             if (DateTime.TryParse(t.期日, out dt)) {
                                 sb.AppendLine("BEGIN:VEVENT");
-                                sb.AppendLine(string.Format("SUMMARY:{0}", t.タスク));
+                                string safeTitle = (t.タスク ?? "").Replace("\r", "").Replace("\n", " ");
+                                sb.AppendLine(string.Format("SUMMARY:{0}", safeTitle));
                                 sb.AppendLine(string.Format("DTSTART;VALUE=DATE:{0:yyyyMMdd}", dt));
                                 sb.AppendLine(string.Format("DTEND;VALUE=DATE:{0:yyyyMMdd}", dt.AddDays(1)));
-                                sb.AppendLine(string.Format("UID:{0}\nDTSTAMP:{1}\nEND:VEVENT", t.ID, dtStamp));
+                                sb.AppendLine(string.Format("UID:{0}\r\nDTSTAMP:{1}\r\nEND:VEVENT", t.ID, dtStamp));
                             }
                         }
                     }
@@ -129,10 +130,11 @@ namespace TaskManager.Forms
                                 DateTime dt;
                                 if (DateTime.TryParse(ev.StartTime, out dt)) {
                                     sb.AppendLine("BEGIN:VEVENT");
-                                    sb.AppendLine(string.Format("SUMMARY:{0}", ev.Title));
+                                    string safeTitle = (ev.Title ?? "").Replace("\r", "").Replace("\n", " ");
+                                    sb.AppendLine(string.Format("SUMMARY:{0}", safeTitle));
                                     sb.AppendLine(string.Format("DTSTART;VALUE=DATE:{0:yyyyMMdd}", dt));
                                     sb.AppendLine(string.Format("DTEND;VALUE=DATE:{0:yyyyMMdd}", dt.AddDays(1)));
-                                    sb.AppendLine(string.Format("UID:{0}\nDTSTAMP:{1}\nEND:VEVENT", ev.ID, dtStamp));
+                                    sb.AppendLine(string.Format("UID:{0}\r\nDTSTAMP:{1}\r\nEND:VEVENT", ev.ID, dtStamp));
                                 }
                             }
                         }

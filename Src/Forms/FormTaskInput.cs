@@ -1,10 +1,11 @@
-﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
 using TaskManager.Models;
 using TaskManager.Services;
+using TaskManager.Utils;
 
 namespace TaskManager.Forms
 {
@@ -15,12 +16,6 @@ namespace TaskManager.Forms
         private Dictionary<string, List<string>> _categories;
 
         public TaskItem ResultTask { get; private set; }
-
-        [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
-        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
-
-        [System.Runtime.InteropServices.DllImport("uxtheme.dll", ExactSpelling = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
-        private static extern int SetWindowTheme(IntPtr hwnd, string pszSubAppName, string pszSubIdList);
 
         private const int DTM_GETMONTHCAL = 0x1008;
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -43,6 +38,7 @@ namespace TaskManager.Forms
         private ComboBox comboNotify;
         private ComboBox comboCategory;
         private ComboBox comboSubCategory;
+        private NumericUpDown numTargetHours;
         private TextBox textTask;
         private Button buttonSave;
         private Button buttonCancel;
@@ -66,7 +62,7 @@ namespace TaskManager.Forms
         private void InitializeComponent()
         {
             this.Text = _existingTask != null ? "タスクの編集" : "プロジェクト／タスクの新規追加";
-            this.ClientSize = new Size(410, 530);
+            this.ClientSize = new Size(410, 590);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -146,7 +142,7 @@ namespace TaskManager.Forms
             {
                 Location = new Point(15, 215),
                 Size = new Size(180, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList
+                DropDownStyle = ComboBoxStyle.DropDown
             };
             comboCategory.SelectedIndexChanged += ComboCategory_SelectedIndexChanged;
             this.Controls.Add(comboCategory);
@@ -159,31 +155,47 @@ namespace TaskManager.Forms
             {
                 Location = new Point(215, 215),
                 Size = new Size(180, 25),
-                DropDownStyle = ComboBoxStyle.DropDownList
+                DropDownStyle = ComboBoxStyle.DropDown
             };
             this.Controls.Add(comboSubCategory);
 
+            // --- 目標時間 ---
+            var labelTargetHours = new Label { Text = "目標時間 (h)：", Location = new Point(15, 255), AutoSize = true };
+            this.Controls.Add(labelTargetHours);
+
+            numTargetHours = new NumericUpDown
+            {
+                Location = new Point(15, 275),
+                Width = 180,
+                DecimalPlaces = 1,
+                Increment = 0.5m,
+                Maximum = 9999m,
+                Minimum = 0m
+            };
+            this.Controls.Add(numTargetHours);
+
             // --- タスク内容 ---
-            var labelTask = new Label { Text = "タスク内容：", Location = new Point(15, 255), AutoSize = true };
+            var labelTask = new Label { Text = "タスク内容：", Location = new Point(15, 315), AutoSize = true };
             this.Controls.Add(labelTask);
 
             textTask = new TextBox
             {
                 Multiline = true,
-                Location = new Point(15, 275),
+                Location = new Point(15, 335),
                 Size = new Size(380, 80),
-                ScrollBars = ScrollBars.Vertical
+                ScrollBars = ScrollBars.Vertical,
+                AcceptsReturn = true
             };
             this.Controls.Add(textTask);
 
             // --- 定期設定 ---
-            lblGeneratedInfo = new Label { Text = "ℹ️ このタスクは定期実行ルールから生成されました", Location = new Point(15, 365), AutoSize = true, ForeColor = Color.Gray, Visible = false };
+            lblGeneratedInfo = new Label { Text = "ℹ️ このタスクは定期実行ルールから生成されました", Location = new Point(15, 425), AutoSize = true, ForeColor = Color.Gray, Visible = false };
             this.Controls.Add(lblGeneratedInfo);
 
-            chkRecurring = new CheckBox { Text = "このタスクを定期実行（ルーチン）にする", Location = new Point(15, 365), AutoSize = true };
+            chkRecurring = new CheckBox { Text = "このタスクを定期実行（ルーチン）にする", Location = new Point(15, 425), AutoSize = true };
             this.Controls.Add(chkRecurring);
 
-            grpRecurring = new GroupBox { Text = "定期設定", Location = new Point(15, 390), Size = new Size(380, 85) };
+            grpRecurring = new GroupBox { Text = "定期設定", Location = new Point(15, 450), Size = new Size(380, 85) };
             this.Controls.Add(grpRecurring);
 
             chkRecurring.CheckedChanged += (s, e) => { 
@@ -219,11 +231,11 @@ namespace TaskManager.Forms
             };
 
             // --- ボタン ---
-            buttonSave = new Button { Text = "保存", Location = new Point(225, 485), Size = new Size(80, 30) };
+            buttonSave = new Button { Text = "保存", Location = new Point(225, 545), Size = new Size(80, 30) };
             buttonSave.Click += ButtonSave_Click;
             this.Controls.Add(buttonSave);
 
-            buttonCancel = new Button { Text = "キャンセル", Location = new Point(315, 485), Size = new Size(80, 30) };
+            buttonCancel = new Button { Text = "キャンセル", Location = new Point(315, 545), Size = new Size(80, 30) };
             buttonCancel.Click += (s, e) => { this.DialogResult = DialogResult.Cancel; this.Close(); };
             this.Controls.Add(buttonCancel);
 
@@ -238,18 +250,8 @@ namespace TaskManager.Forms
             var settings = _dataService.LoadSettings();
             bool isDark = settings != null && settings.IsDarkMode; // 💡 設定ファイルから正確にダークモード状態を取得
 
-            try {
-                int useImmersiveDarkMode = isDark ? 1 : 0;
-                DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
-                DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
-            }
-            catch { }
-
-            // フォーム全体の背景色を設定
-            this.BackColor = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
-
-            // 2. 定期設定など、グループボックス内の文字が消える問題の修正
-            FixThemeRecursively(this, isDark);
+            ThemeManager.ApplyDarkModeToWindow(this.Handle, isDark);
+            ThemeManager.ApplyTheme(this, isDark);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -257,79 +259,7 @@ namespace TaskManager.Forms
             base.OnHandleCreated(e);
             var settings = _dataService.LoadSettings();
             bool isDark = settings != null && settings.IsDarkMode;
-            try {
-                int useImmersiveDarkMode = isDark ? 1 : 0;
-                DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
-                DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
-            }
-            catch { }
-        }
-
-        private void FixThemeRecursively(Control parent, bool isDark)
-        {
-            Color formBg = isDark ? Color.FromArgb(45, 45, 48) : SystemColors.Control;
-            Color surfaceBg = isDark ? Color.FromArgb(30, 30, 30) : SystemColors.Window;
-            Color fg = isDark ? Color.White : SystemColors.ControlText;
-
-            foreach (Control c in parent.Controls)
-            {
-                // 背景色の設定
-                if (c is Panel || c is GroupBox) c.BackColor = formBg;
-                else if (c is TextBox || c is NumericUpDown || c is ComboBox) {
-                    c.BackColor = surfaceBg; c.ForeColor = fg;
-                    var cmb = c as ComboBox;
-                    if (cmb != null) cmb.FlatStyle = FlatStyle.Flat;
-                    var txt = c as TextBox;
-                    if (txt != null) txt.BorderStyle = BorderStyle.FixedSingle;
-                }
-                else if (c is DateTimePicker) {
-                    var dtp = (DateTimePicker)c;
-                    dtp.BackColor = surfaceBg;
-                    dtp.ForeColor = fg;
-                    dtp.CalendarMonthBackground = surfaceBg;
-                    dtp.CalendarTitleBackColor = formBg;
-                    dtp.CalendarTitleForeColor = fg;
-                    dtp.CalendarTrailingForeColor = Color.Gray;
-                    if (isDark && Environment.OSVersion.Version.Major >= 10) {
-                        SetWindowTheme(dtp.Handle, "DarkMode_Explorer", null);
-                        // 💡 ドロップダウンされた月間カレンダー部分にもダークモードテーマを適用
-                        dtp.DropDown += (s, ev) => {
-                            IntPtr hMonthCal = SendMessage(dtp.Handle, DTM_GETMONTHCAL, IntPtr.Zero, IntPtr.Zero);
-                            if (hMonthCal != IntPtr.Zero) {
-                                SetWindowTheme(hMonthCal, "", ""); // ビジュアルスタイルを無効化
-                                int bgInt = ColorTranslator.ToWin32(surfaceBg);
-                                int fgInt = ColorTranslator.ToWin32(fg);
-                                SendMessage(hMonthCal, 0x1006, (IntPtr)0, (IntPtr)bgInt); // カレンダー背景
-                                SendMessage(hMonthCal, 0x1006, (IntPtr)1, (IntPtr)fgInt); // テキスト
-                                SendMessage(hMonthCal, 0x1006, (IntPtr)2, (IntPtr)ColorTranslator.ToWin32(formBg)); // タイトル背景
-                                SendMessage(hMonthCal, 0x1006, (IntPtr)3, (IntPtr)fgInt); // タイトルテキスト
-                                SendMessage(hMonthCal, 0x1006, (IntPtr)4, (IntPtr)bgInt); // 月間背景
-                                SendMessage(hMonthCal, 0x1006, (IntPtr)5, (IntPtr)ColorTranslator.ToWin32(Color.Gray)); // 前後月のテキスト
-                            }
-                        };
-                    } else {
-                        SetWindowTheme(dtp.Handle, "Explorer", null);
-                        dtp.DropDown += (s, ev) => {
-                            IntPtr hMonthCal = SendMessage(dtp.Handle, DTM_GETMONTHCAL, IntPtr.Zero, IntPtr.Zero);
-                            if (hMonthCal != IntPtr.Zero) {
-                                SetWindowTheme(hMonthCal, "Explorer", null);
-                            }
-                        };
-                    }
-                }
-                else if (c is Button) {
-                    var btn = (Button)c;
-                    btn.FlatStyle = FlatStyle.Flat;
-                    btn.FlatAppearance.BorderColor = isDark ? Color.FromArgb(80, 80, 80) : Color.DarkGray;
-                    btn.BackColor = isDark ? Color.FromArgb(60, 60, 65) : SystemColors.Control;
-                    btn.ForeColor = fg;
-                }
-
-                // 文字色の設定
-                if (c is Label || c is CheckBox || c is GroupBox || c is Panel) c.ForeColor = fg;
-
-                if (c.HasChildren) FixThemeRecursively(c, isDark);
-            }
+            ThemeManager.ApplyDarkModeToWindow(this.Handle, isDark);
         }
 
         private void LoadData(string projectIDForNew)
@@ -371,6 +301,15 @@ namespace TaskManager.Forms
                     {
                         comboSubCategory.SelectedItem = _existingTask.サブカテゴリ;
                     }
+                }
+
+                if (_existingTask.TargetHours.HasValue)
+                {
+                    numTargetHours.Value = (decimal)_existingTask.TargetHours.Value;
+                }
+                else
+                {
+                    numTargetHours.Value = 0m;
                 }
 
                 if (!string.IsNullOrEmpty(_existingTask.ParentRuleID)) {
@@ -449,8 +388,9 @@ namespace TaskManager.Forms
             ResultTask.優先度 = comboPriority.SelectedItem != null ? comboPriority.SelectedItem.ToString() : null;
             ResultTask.進捗度 = comboStatus.SelectedItem != null ? comboStatus.SelectedItem.ToString() : null;
             ResultTask.通知設定 = comboNotify.SelectedItem != null ? comboNotify.SelectedItem.ToString() : null;
-            ResultTask.カテゴリ = comboCategory.SelectedItem != null ? comboCategory.SelectedItem.ToString() : null;
-            ResultTask.サブカテゴリ = comboSubCategory.SelectedItem != null ? comboSubCategory.SelectedItem.ToString() : "";
+            ResultTask.カテゴリ = !string.IsNullOrWhiteSpace(comboCategory.Text) ? comboCategory.Text.Trim() : null;
+            ResultTask.サブカテゴリ = !string.IsNullOrWhiteSpace(comboSubCategory.Text) ? comboSubCategory.Text.Trim() : "";
+            ResultTask.TargetHours = numTargetHours.Value > 0 ? (double?)numTargetHours.Value : null;
 
             // プロジェクトIDの解決ロジック（自由入力による新規プロジェクト作成）
             var selectedProj = comboProject.SelectedItem as ProjectItem;
@@ -464,6 +404,27 @@ namespace TaskManager.Forms
                 // 一時的に ProjectName プロパティに文字列として格納し、親フォームで解決するフラグとします。
                 ResultTask.ProjectName = comboProject.Text.Trim(); 
                 ResultTask.ProjectID = ""; // 親側で Guid 採番する
+            }
+
+            // カテゴリとサブカテゴリの新規追加処理
+            if (!string.IsNullOrEmpty(ResultTask.カテゴリ))
+            {
+                bool categoryUpdated = false;
+                if (!_categories.ContainsKey(ResultTask.カテゴリ))
+                {
+                    _categories[ResultTask.カテゴリ] = new List<string>();
+                    categoryUpdated = true;
+                }
+                if (!string.IsNullOrEmpty(ResultTask.サブカテゴリ) && !_categories[ResultTask.カテゴリ].Contains(ResultTask.サブカテゴリ))
+                {
+                    _categories[ResultTask.カテゴリ].Add(ResultTask.サブカテゴリ);
+                    categoryUpdated = true;
+                }
+                
+                if (categoryUpdated)
+                {
+                    _dataService.SaveToJson(_dataService.CategoriesFile, _categories);
+                }
             }
 
             if (chkRecurring.Visible) {
@@ -506,19 +467,7 @@ namespace TaskManager.Forms
                 if (ruleUpdated) _dataService.SaveToJson(_dataService.RecurringRulesFile, rules);
             }
 
-            await ShowSaveFeedbackAndClose("タスクを保存しました");
-        }
-
-        private async System.Threading.Tasks.Task ShowSaveFeedbackAndClose(string message)
-        {
-            foreach (Control c in this.Controls) { var b = c as Button; if (b != null) b.Enabled = false; }
-            var lbl = new Label { Text = message, Font = new Font("Meiryo UI", 9, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(180, 0, 0, 0), AutoSize = true, Padding = new Padding(10) };
-            this.Controls.Add(lbl);
-            lbl.Location = new Point((this.ClientSize.Width - lbl.Width) / 2, (this.ClientSize.Height - lbl.Height) / 2);
-            lbl.BringToFront();
-            await System.Threading.Tasks.Task.Delay(1200);
-            this.DialogResult = DialogResult.OK;
-            this.Close();
+            await UIUtility.ShowSaveFeedbackAndClose(this, "タスクを保存しました");
         }
     }
 }

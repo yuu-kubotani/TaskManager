@@ -426,7 +426,7 @@ namespace TaskManager.Forms
                 var dhItem = _cmbDueHolidayShift.SelectedItem as ComboItem; string dueHShift = dhItem != null ? dhItem.Value : "None";
                 DateTime tempDue = actualDate;
                 if (dueUnit == "日後") tempDue = actualDate.AddDays(dueOffset); else if (dueUnit == "週間後") tempDue = actualDate.AddDays(dueOffset * 7); else if (dueUnit == "ヶ月後") tempDue = actualDate.AddMonths(dueOffset);
-                var holidays = GetHolidays();
+                var holidays = _dataService.GetHolidays();
                 for (int i = 0; i < 30; i++) {
                     string dStr = tempDue.ToString("yyyy-MM-dd"); bool isHol = holidays.ContainsKey(dStr); bool isWe = tempDue.DayOfWeek == DayOfWeek.Saturday || tempDue.DayOfWeek == DayOfWeek.Sunday;
                     if (!isHol && !isWe) break;
@@ -463,7 +463,7 @@ namespace TaskManager.Forms
                     }
                 } else nextTheo = baseDate.AddDays(interval);
             }
-            DateTime actualDate = nextTheo; var holidays = GetHolidays();
+            DateTime actualDate = nextTheo; var holidays = _dataService.GetHolidays();
             for (int i = 0; i < 30; i++) {
                 string dateStr = actualDate.ToString("yyyy-MM-dd"); bool isHol = holidays.ContainsKey(dateStr); bool isWe = actualDate.DayOfWeek == DayOfWeek.Saturday || actualDate.DayOfWeek == DayOfWeek.Sunday;
                 if (!isHol && !isWe) break;
@@ -476,28 +476,6 @@ namespace TaskManager.Forms
                 if (!shifted) break;
             }
             return new RecurringDateResult { TheoreticalDate = nextTheo, ActualDate = actualDate, IsAdjusted = isAdj };
-        }
-
-        private Dictionary<string, string> GetHolidays()
-        {
-            string path = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "holidays.json");
-            if (System.IO.File.Exists(path))
-            {
-                try
-                {
-                    var loaded = _dataService.LoadFromJson<Dictionary<string, string>>(path, new Dictionary<string, string>());
-                    if (loaded != null && loaded.Count > 0) return loaded;
-                }
-                catch { }
-            }
-
-            return new Dictionary<string, string> {
-                { "2026-01-01", "元日" }, { "2026-01-12", "成人の日" }, { "2026-02-11", "建国記念の日" }, { "2026-02-23", "天皇誕生日" },
-                { "2026-03-20", "春分の日" }, { "2026-04-29", "昭和の日" }, { "2026-05-03", "憲法記念日" }, { "2026-05-04", "みどりの日" },
-                { "2026-05-05", "こどもの日" }, { "2026-05-06", "振替休日" }, { "2026-07-20", "海の日" }, { "2026-08-11", "山の日" },
-                { "2026-09-21", "敬老の日" }, { "2026-09-22", "国民の休日" }, { "2026-09-23", "秋分の日" }, { "2026-10-12", "スポーツの日" },
-                { "2026-11-03", "文化の日" }, { "2026-11-23", "勤労感謝の日" }
-            };
         }
 
         private void BtnSave_Click(object sender, EventArgs e)

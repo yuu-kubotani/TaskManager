@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Runtime.InteropServices;
 
 namespace TaskManager.Native
@@ -23,6 +23,18 @@ namespace TaskManager.Native
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
             public string szTypeName;
         }
+
+        public const int DTM_GETMONTHCAL = 0x1008;
+        public const int MCM_SETCOLOR = 0x1006;
+        public const int MCSC_BACKGROUND = 0;
+        public const int MCSC_TEXT = 1;
+        public const int MCSC_TITLEBK = 2;
+        public const int MCSC_TITLETEXT = 3;
+        public const int MCSC_MONTHBK = 4;
+        public const int MCSC_TRAILINGTEXT = 5;
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wp, IntPtr lp);
 
         [DllImport("user32.dll")]
         public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);

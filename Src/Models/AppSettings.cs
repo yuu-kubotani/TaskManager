@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+﻿﻿using System.Collections.Generic;
 
 namespace TaskManager.Models
 {
@@ -54,6 +54,19 @@ namespace TaskManager.Models
             FilesSplitterDistance = 380;
             RememberWindowSize = true;
             WindowSizes = new Dictionary<string, string>();
+            TimeDisplayMode = TimeDisplayMode.Simple;
+
+            // レポート分析・インサイト用の閾値 (旧PowerShell版の AnalysisSettings 互換)
+            UnclassifiedCriticalPercent = 40;
+            UnclassifiedWarningPercent = 15;
+            WorkLowPercent = 5;
+            TaskLongTermDays = 60;
+            TaskMediumTermDays = 21;
+            TaskEfficientDays = 14;
+            CategorySlowDays = 30;
+            UnknownCriticalPercent = 30;
+            UnknownWarningPercent = 10;
+            ZeroDayTaskCount = 5;
         }
 
         public bool RunAtStartup { get; set; }
@@ -111,5 +124,18 @@ namespace TaskManager.Models
         public int CalendarLeftSplitterDistance { get; set; }
         public int FilesSplitterDistance { get; set; }
         public Dictionary<string, string> WindowSizes { get; set; }
+        public TimeDisplayMode TimeDisplayMode { get; set; }
+
+        // レポート分析・インサイト用の閾値プロパティ
+        public int UnclassifiedCriticalPercent { get; set; }
+        public int UnclassifiedWarningPercent { get; set; }
+        public int WorkLowPercent { get; set; }
+        public int TaskLongTermDays { get; set; }
+        public int TaskMediumTermDays { get; set; }
+        public int TaskEfficientDays { get; set; }
+        public int CategorySlowDays { get; set; }
+        public int UnknownCriticalPercent { get; set; }
+        public int UnknownWarningPercent { get; set; }
+        public int ZeroDayTaskCount { get; set; }
     }
 }

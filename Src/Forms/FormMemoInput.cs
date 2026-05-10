@@ -41,6 +41,7 @@ namespace TaskManager.Forms
             txtMemo = new TextBox
             {
                 Multiline = true,
+                AcceptsReturn = true,
                 ScrollBars = ScrollBars.Vertical,
                 Dock = DockStyle.Top,
                 Height = 210,
@@ -48,7 +49,7 @@ namespace TaskManager.Forms
             };
             this.Controls.Add(txtMemo);
 
-            var btnOk = new Button { Text = "OK", Location = new Point(110, 225), Size = new Size(80, 25), DialogResult = DialogResult.OK };
+            var btnOk = new Button { Text = "保存", Location = new Point(110, 225), Size = new Size(80, 25), DialogResult = DialogResult.OK };
             btnOk.Click += (s, e) => { ResultMemo = txtMemo.Text; this.Close(); };
             this.Controls.Add(btnOk);
 

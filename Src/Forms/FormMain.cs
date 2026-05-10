@@ -11,7 +11,7 @@ using TaskManager.Models;
 
 namespace TaskManager.Forms
 {
-    public partial class FormMain : Form
+    public partial class FormMain : Form, IMessageFilter
     {
         // PowerShellの $script: 変数群に相当するグローバル状態
         private readonly string AppVersion = "13.0";
@@ -34,13 +34,15 @@ namespace TaskManager.Forms
         private Stack<IUndoCommand> undoStack = new Stack<IUndoCommand>(); // Undo履歴管理
         
         private string currentCategoryFilter = "(すべて)";
-        private ToolStripComboBox categoryFilterComboBox;
+        private string currentSearchKeyword = "";
+        private ToolStripTextBox searchTextBox;
 
         private ToolStripMenuItem darkModeMenuItem;
 
         // UIコントロール
         private MenuStrip mainMenu;
         private ToolStrip toolStrip;
+        private ToolStripButton btnQuickSettings;
         private StatusStrip statusBar;
         private SplitContainer mainContainer;
         private TabControl tabControl;
@@ -52,6 +54,7 @@ namespace TaskManager.Forms
         
         // クイック設定用コントロール
         private Panel quickSettingsPanel;
+        private ComboBox qCmbCategoryFilter;
         private TrackBar qTbOpacity;
         private NumericUpDown qNumTimeStart, qNumTimeEnd, qNumPomodoro;
         private ComboBox qCmbDensity;
@@ -67,6 +70,7 @@ namespace TaskManager.Forms
         private ToolStripMenuItem dgvArchiveMenuItem;
         private ToolStripMenuItem dgvBulkCompleteMenuItem;
         private ToolStripMenuItem dgvBulkDeleteMenuItem;
+        private ContextMenuStrip timeDisplayMenu;
 
         // カンバン用コントロール
         private TableLayoutPanel kanbanLayout;
@@ -101,6 +105,17 @@ namespace TaskManager.Forms
         private TimeLog selectedTimeLog = null;
         private EventItem selectedEvent = null;
         private Point dayInfoDragStartPoint = Point.Empty;
+        
+        // --- 選択範囲保持用 ---
+        private DateTime? selectedTimeRangeStart = null;
+        private DateTime? selectedTimeRangeEnd = null;
+        private RectangleF selectedTimeRangeRect = RectangleF.Empty;
+        private string selectedTimeRangeType = null;
+
+        // --- ツールチップ ---
+        private ToolTip mainToolTip;
+        private Dictionary<string, int> kanbanHoveredIndices = new Dictionary<string, int>();
+        private object timelineHoveredItem = null;
 
         private Panel timelinePanel;
         private Panel notificationPanel;
@@ -145,6 +160,7 @@ namespace TaskManager.Forms
             dataService = new DataService(appRoot);
 
             InitializeComponent();
+            Application.AddMessageFilter(this);
             LoadData();
         }
 
@@ -159,6 +175,45 @@ namespace TaskManager.Forms
             catch { }
         }
 
+        public bool PreFilterMessage(ref Message m)
+        {
+            const int WM_LBUTTONDOWN = 0x0201;
+            const int WM_RBUTTONDOWN = 0x0204;
+            const int WM_NCLBUTTONDOWN = 0x00A1;
+
+            if (m.Msg == WM_LBUTTONDOWN || m.Msg == WM_RBUTTONDOWN || m.Msg == WM_NCLBUTTONDOWN)
+            {
+                if (quickSettingsPanel != null && quickSettingsPanel.Visible)
+                {
+                    Control target = Control.FromHandle(m.HWnd);
+                    bool isInsideQuickSettings = false;
+                    Control current = target;
+
+                    while (current != null)
+                    {
+                        if (current == quickSettingsPanel)
+                        {
+                            isInsideQuickSettings = true;
+                            break;
+                        }
+                        current = current.Parent;
+                    }
+
+                    if (!isInsideQuickSettings)
+                    {
+                        if (target == toolStrip)
+                        {
+                            Point pt = toolStrip.PointToClient(Cursor.Position);
+                            var item = toolStrip.GetItemAt(pt);
+                            if (item == btnQuickSettings) return false;
+                        }
+                        this.Invoke((MethodInvoker)delegate { quickSettingsPanel.Visible = false; });
+                    }
+                }
+            }
+            return false;
+        }
+
         private void InitializeComponent()
         {
             this.Text = string.Format("タスク管理マネージャー v{0}", AppVersion);
@@ -167,14 +222,23 @@ namespace TaskManager.Forms
             this.StartPosition = FormStartPosition.CenterScreen;
             this.KeyPreview = true; // フォーム全体でキーイベントを取得可能にする
             this.KeyDown += FormMain_KeyDown;
+            this.Font = new Font("Meiryo UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point, ((byte)(128)));
+
+            mainToolTip = new ToolTip();
+            mainToolTip.AutoPopDelay = 10000;
+            mainToolTip.InitialDelay = 500;
+            mainToolTip.ReshowDelay = 100;
 
             // --- メインメニューの構築 ---
             mainMenu = new MenuStrip();
+            mainMenu.ShowItemToolTips = true;
 
             var fileMenuItem = new ToolStripMenuItem("ファイル(&F)");
             var addNewTaskMenuItem = new ToolStripMenuItem("プロジェクト／タスクの新規追加(&N)") { ShortcutKeys = Keys.Control | Keys.N };
+            addNewTaskMenuItem.ToolTipText = "新しいプロジェクトやタスクを作成します";
             addNewTaskMenuItem.Click += AddNewTaskAction;
             var addNewEventMenuItem = new ToolStripMenuItem("イベントの追加(&A)");
+            addNewEventMenuItem.ToolTipText = "カレンダーに予定を追加します";
             addNewEventMenuItem.Click += (s, e) => {
                 var form = new FormEventInput(null, selectedCalendarDate);
                 ThemeManager.ApplyTheme(form, isDarkMode);
@@ -186,8 +250,30 @@ namespace TaskManager.Forms
                     UpdateAllViews();
                 }
             };
+            var addFromTemplateMenuItem = new ToolStripMenuItem("テンプレートから追加(&T)");
+            addFromTemplateMenuItem.ToolTipText = "登録済みのテンプレートからプロジェクトとタスクを一括作成します";
+            addFromTemplateMenuItem.Click += (s, e) => {
+                var form = new FormTemplate(dataService, Projects, isDarkMode);
+                if (form.ShowDialog(this) == DialogResult.OK) {
+                    if (form.NewProject != null) Projects.Add(form.NewProject);
+                    if (form.NewTasks != null) AllTasks.AddRange(form.NewTasks);
+                    dataService.SaveToJson(dataService.ProjectsFile, Projects);
+                    dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                    UpdateAllViews();
+                }
+            };
             var globalSettingsMenuItem = new ToolStripMenuItem("全体設定(&O)");
+            globalSettingsMenuItem.ToolTipText = "アプリ全体の動作や表示の設定を変更します";
             globalSettingsMenuItem.Click += (s, e) => {
+                if (Settings != null)
+                {
+                    Settings.WindowWidth = this.Width;
+                    Settings.WindowHeight = this.Height;
+                    Settings.MainSplitterDistance = mainContainer.SplitterDistance;
+                    Settings.FilesSplitterDistance = associatedFilesSplitContainer.SplitterDistance;
+                    Settings.CalendarSplitterDistance = calendarSplitContainer.SplitterDistance;
+                    Settings.CalendarLeftSplitterDistance = calendarLeftSplitContainer.SplitterDistance;
+                }
                 SyncWindowSizesFromDisk();
                 var form = new FormSettings(Settings);
                 ThemeManager.ApplyTheme(form, isDarkMode);
@@ -205,6 +291,7 @@ namespace TaskManager.Forms
                 }
             };
             var backupRestoreMenuItem = new ToolStripMenuItem("バックアップと復元(&B)");
+            backupRestoreMenuItem.ToolTipText = "データを手動でバックアップしたり、過去のデータから復元します";
             backupRestoreMenuItem.Click += (s, e) => {
                 var form = new FormBackupRestore(dataService, Settings, isDarkMode);
                 if (form.ShowDialog(this) == DialogResult.OK)
@@ -213,14 +300,17 @@ namespace TaskManager.Forms
                 }
             };
             var reportMenuItem = new ToolStripMenuItem("レポート(&R)");
+            reportMenuItem.ToolTipText = "作業実績のグラフや分析インサイトを確認します";
             reportMenuItem.Click += (s, e) => { 
                 new FormReport(dataService, AllTimeLogs, AllTasks, Projects, Settings, isDarkMode).ShowDialog(this); 
             };
             var dailyReportMenuItem = new ToolStripMenuItem("日報の出力(&D)");
+            dailyReportMenuItem.ToolTipText = "1日の作業内容をテキストで出力し、日報として利用します";
             dailyReportMenuItem.Click += (s, e) => {
-                new FormDailyReport(AllTimeLogs, AllTasks, Projects, isDarkMode).ShowDialog(this);
+                new FormDailyReport(dataService, AllTimeLogs, AllTasks, Projects, AllEvents, isDarkMode).ShowDialog(this);
             };
             var icsExchangeMenuItem = new ToolStripMenuItem("カレンダー連携 (ICS)...");
+            icsExchangeMenuItem.ToolTipText = "他のカレンダーソフト(OutlookやGoogleカレンダー)と予定を連携(出力/読込)します";
             icsExchangeMenuItem.Click += (s, e) => {
                 var form = new FormIcsExchange(dataService, AllTasks, AllEvents, Projects, isDarkMode);
                 if (form.ShowDialog(this) == DialogResult.OK)
@@ -229,17 +319,21 @@ namespace TaskManager.Forms
                 }
             };
             var exitMenuItem = new ToolStripMenuItem("終了(&X)");
+            exitMenuItem.ToolTipText = "アプリケーションを完全に終了します";
             exitMenuItem.Click += (s, e) => { forceExit = true; this.Close(); };
             fileMenuItem.DropDownItems.AddRange(new ToolStripItem[] {
-                addNewTaskMenuItem, addNewEventMenuItem, new ToolStripSeparator(),
-                globalSettingsMenuItem, backupRestoreMenuItem, reportMenuItem, dailyReportMenuItem, icsExchangeMenuItem,
+                addNewTaskMenuItem, addNewEventMenuItem, addFromTemplateMenuItem, new ToolStripSeparator(),
+                globalSettingsMenuItem, icsExchangeMenuItem,
                 new ToolStripSeparator(), exitMenuItem
             });
 
             var editMenuItem = new ToolStripMenuItem("編集(&E)");
             var editCategoriesMenuItem = new ToolStripMenuItem("カテゴリの編集(&C)");
+            editCategoriesMenuItem.ToolTipText = "タスクを分類するためのカテゴリ一覧を追加・編集します";
             var editTemplatesMenuItem = new ToolStripMenuItem("テンプレートの編集(&M)");
+            editTemplatesMenuItem.ToolTipText = "よく使うプロジェクトの構成をテンプレートとして登録・編集します";
             var manageRecurringMenuItem = new ToolStripMenuItem("定期タスクの設定(&R)");
+            manageRecurringMenuItem.ToolTipText = "決まったタイミングで自動生成される「定期タスク」のルールを管理します";
             manageRecurringMenuItem.Click += (s, e) => {
                 new FormRecurringRuleEditor(dataService, Projects).ShowDialog(this);
                 InvokeRecurringTasks(); // 編集後に再評価
@@ -265,25 +359,31 @@ namespace TaskManager.Forms
 
             var viewMenuItem = new ToolStripMenuItem("表示(&V)");
             var toggleFilesPanelMenuItem = new ToolStripMenuItem("関連ファイルパネルの表示/非表示");
+            toggleFilesPanelMenuItem.ToolTipText = "画面右側の「関連ファイル」や「プレビュー」パネルの表示を切り替えます";
             toggleFilesPanelMenuItem.Click += (s, e) => { mainContainer.Panel2Collapsed = !mainContainer.Panel2Collapsed; };
             
             var groupingMenuItem = new ToolStripMenuItem("表示方法の切替 (プロジェクト/カテゴリ)") { CheckOnClick = true, Checked = true };
+            groupingMenuItem.ToolTipText = "リスト表示でタスクをプロジェクトごとにグループ化して表示するかどうかを切り替えます";
             groupingMenuItem.Click += (s, e) => { groupByProject = groupingMenuItem.Checked; UpdateAllViews(); };
             
             var hideCompletedMenuItem = new ToolStripMenuItem("完了したタスクを隠す") { CheckOnClick = true };
+            hideCompletedMenuItem.ToolTipText = "すでに「完了済み」になっているタスクをリストやカンバンで非表示にします";
             hideCompletedMenuItem.Click += (s, e) => { 
                 if (Settings != null) { Settings.HideCompletedTasks = hideCompletedMenuItem.Checked; dataService.SaveToJson(dataService.SettingsFile, Settings); }
                 UpdateAllViews(); 
             };
             
             var showKanbanDoneMenuItem = new ToolStripMenuItem("カンバンの完了列を表示") { CheckOnClick = true, Checked = true };
+            showKanbanDoneMenuItem.ToolTipText = "カンバンボードの一番右に「完了済み」の列を表示するかどうかを切り替えます";
             showKanbanDoneMenuItem.Click += (s, e) => { 
                 if (Settings != null) { Settings.ShowKanbanDone = showKanbanDoneMenuItem.Checked; dataService.SaveToJson(dataService.SettingsFile, Settings); }
                 UpdateAllViews(); 
             };
             
             darkModeMenuItem = new ToolStripMenuItem("ダークモード") { CheckOnClick = true };
+            darkModeMenuItem.ToolTipText = "画面の配色を暗い色(ダークモード)に変更します";
             var viewArchiveMenuItem = new ToolStripMenuItem("アーカイブビューを開く...");
+            viewArchiveMenuItem.ToolTipText = "過去に完了してアーカイブされたプロジェクトやタスクを閲覧・復元します";
             viewArchiveMenuItem.Click += (s, e) => {
                 var form = new FormArchiveView(dataService, AllTasks, Projects, isDarkMode);
                 if (form.ShowDialog(this) == DialogResult.OK)
@@ -294,23 +394,63 @@ namespace TaskManager.Forms
                 }
             };
             darkModeMenuItem.Click += DarkModeMenuItem_Click;
+
+            EventHandler modeChangeHandler = (s, e) => {
+                var clickedItem = s as ToolStripMenuItem;
+                if (clickedItem != null && Settings != null) {
+                    if (clickedItem.Tag.ToString() == "Simple") Settings.TimeDisplayMode = TaskManager.Models.TimeDisplayMode.Simple;
+                    else if (clickedItem.Tag.ToString() == "Remaining") Settings.TimeDisplayMode = TaskManager.Models.TimeDisplayMode.Remaining;
+                    else if (clickedItem.Tag.ToString() == "ProgressBar") Settings.TimeDisplayMode = TaskManager.Models.TimeDisplayMode.ProgressBar;
+                    
+                    dataService.SaveToJson(dataService.SettingsFile, Settings);
+                    if (taskDataGridView != null) taskDataGridView.Refresh(); // 確実な再描画を行う
+                }
+            };
+
+            var timeDisplayModeMenuItem = new ToolStripMenuItem("時間表示モード");
+            timeDisplayModeMenuItem.ToolTipText = "リスト表示の「実績 / 目標」列の表示形式を変更します";
+            var viewMenuSimple = new ToolStripMenuItem("実績のみ") { Tag = "Simple" };
+            var viewMenuRemaining = new ToolStripMenuItem("残り時間表示") { Tag = "Remaining" };
+            var viewMenuProgressBar = new ToolStripMenuItem("プログレスバー表示") { Tag = "ProgressBar" };
+            viewMenuSimple.Click += modeChangeHandler;
+            viewMenuRemaining.Click += modeChangeHandler;
+            viewMenuProgressBar.Click += modeChangeHandler;
+            timeDisplayModeMenuItem.DropDownItems.AddRange(new ToolStripItem[] { viewMenuSimple, viewMenuRemaining, viewMenuProgressBar });
+            timeDisplayModeMenuItem.DropDownOpening += (s, e) => {
+                if (Settings != null) {
+                    viewMenuSimple.Checked = Settings.TimeDisplayMode == TaskManager.Models.TimeDisplayMode.Simple;
+                    viewMenuRemaining.Checked = Settings.TimeDisplayMode == TaskManager.Models.TimeDisplayMode.Remaining;
+                    viewMenuProgressBar.Checked = Settings.TimeDisplayMode == TaskManager.Models.TimeDisplayMode.ProgressBar;
+                }
+            };
+
             viewMenuItem.DropDownItems.AddRange(new ToolStripItem[] {
                 toggleFilesPanelMenuItem, groupingMenuItem, new ToolStripSeparator(),
-                hideCompletedMenuItem, showKanbanDoneMenuItem, darkModeMenuItem, new ToolStripSeparator(),
-                viewArchiveMenuItem
+                hideCompletedMenuItem, showKanbanDoneMenuItem, new ToolStripSeparator(),
+                timeDisplayModeMenuItem, darkModeMenuItem
             });
 
-            mainMenu.Items.AddRange(new ToolStripItem[] { fileMenuItem, editMenuItem, viewMenuItem });
+            var analysisMenuItem = new ToolStripMenuItem("分析(&A)");
+            analysisMenuItem.DropDownItems.AddRange(new ToolStripItem[] {
+                reportMenuItem, dailyReportMenuItem
+            });
+
+            var historyMenuItem = new ToolStripMenuItem("履歴(&H)");
+            historyMenuItem.DropDownItems.AddRange(new ToolStripItem[] {
+                viewArchiveMenuItem, backupRestoreMenuItem
+            });
+
+            mainMenu.Items.AddRange(new ToolStripItem[] { fileMenuItem, editMenuItem, viewMenuItem, analysisMenuItem, historyMenuItem });
             this.MainMenuStrip = mainMenu;
 
             // --- ツールバーの構築 ---
-            toolStrip = new ToolStrip { ImageScalingSize = new Size(24, 24), AutoSize = false, Height = 48 };
+            toolStrip = new ToolStrip { ImageScalingSize = new Size(24, 24), AutoSize = false, Height = 54, RenderMode = ToolStripRenderMode.ManagerRenderMode };
 
             var btnAdd = new ToolStripDropDownButton("新規追加") { 
                 Image = SystemIcons.Application.ToBitmap(), 
                 DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, 
                 TextImageRelation = TextImageRelation.ImageAboveText,
-                AutoSize = false, Size = new Size(70, 45)
+                AutoSize = false, Size = new Size(80, 50)
             };
             var addTaskMenu = new ToolStripMenuItem("プロジェクト／タスクの新規追加");
             addTaskMenu.Click += AddNewTaskAction;
@@ -331,8 +471,10 @@ namespace TaskManager.Forms
                 Image = SystemIcons.Application.ToBitmap(), 
                 DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, 
                 TextImageRelation = TextImageRelation.ImageAboveText,
-                AutoSize = false, Size = new Size(130, 45)
+                AutoSize = false, Size = new Size(140, 50)
             };
+            btnAdd.ToolTipText = "新しいタスクや予定を作成します";
+            btnAddFromTemplate.ToolTipText = "登録済みのテンプレートからプロジェクトとタスクを一括作成します";
             btnAddFromTemplate.Click += (s, e) => {
                 var form = new FormTemplate(dataService, Projects, isDarkMode);
                 if (form.ShowDialog(this) == DialogResult.OK) {
@@ -347,40 +489,57 @@ namespace TaskManager.Forms
                 Image = SystemIcons.Information.ToBitmap(), 
                 DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, 
                 TextImageRelation = TextImageRelation.ImageAboveText,
-                AutoSize = false, Size = new Size(70, 45)
+                AutoSize = false, Size = new Size(80, 50)
             };
             btnNotifications.Click += BtnNotifications_Click;
-            var btnLatestReport = new ToolStripButton("最新のレポート") { 
-                Image = SystemIcons.Application.ToBitmap(), 
+            btnNotifications.ToolTipText = "期限が近いタスクや予定の通知を確認します";
+            btnQuickSettings = new ToolStripButton("⚙️ クイック設定") { 
                 DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, 
                 TextImageRelation = TextImageRelation.ImageAboveText,
-                AutoSize = false, Size = new Size(100, 45)
-            };
-            btnLatestReport.Click += (s, e) => { 
-                new FormReport(dataService, AllTimeLogs, AllTasks, Projects, Settings, isDarkMode).ShowDialog(this); 
-            };
-            var btnQuickSettings = new ToolStripButton("⚙️ クイック設定") { 
-                DisplayStyle = ToolStripItemDisplayStyle.ImageAndText, 
-                TextImageRelation = TextImageRelation.ImageAboveText,
-                AutoSize = false, Size = new Size(90, 45),
+                AutoSize = false, Size = new Size(100, 50),
                 Alignment = ToolStripItemAlignment.Right
             };
             btnQuickSettings.Click += (s, e) => {
                 quickSettingsPanel.Visible = !quickSettingsPanel.Visible;
                 if (quickSettingsPanel.Visible) SyncQuickSettingsToUI();
             };
+            btnQuickSettings.ToolTipText = "クイック設定パネルの表示/非表示を切り替えます";
 
-            categoryFilterComboBox = new ToolStripComboBox { Alignment = ToolStripItemAlignment.Right, Width = 150 };
-            categoryFilterComboBox.SelectedIndexChanged += (s, e) => {
-                currentCategoryFilter = categoryFilterComboBox.SelectedItem != null ? categoryFilterComboBox.SelectedItem.ToString() : "(すべて)";
-                UpdateAllViews();
+            searchTextBox = new ToolStripTextBox { Alignment = ToolStripItemAlignment.Right, Width = 150 };
+            searchTextBox.ToolTipText = "タスク名で検索...";
+            searchTextBox.Text = "検索...";
+            searchTextBox.ForeColor = Color.Gray;
+            searchTextBox.Enter += (s, e) => { if (searchTextBox.Text == "検索...") { searchTextBox.Text = ""; searchTextBox.ForeColor = isDarkMode ? Color.White : SystemColors.ControlText; } };
+            searchTextBox.Leave += (s, e) => { if (string.IsNullOrWhiteSpace(searchTextBox.Text)) { searchTextBox.Text = "検索..."; searchTextBox.ForeColor = Color.Gray; } };
+            searchTextBox.TextChanged += (s, e) => {
+                if (searchTextBox.Text != "検索...") {
+                    currentSearchKeyword = searchTextBox.Text.ToLower();
+                    UpdateAllViews();
+                }
             };
-            var lblCategoryFilter = new ToolStripLabel("カテゴリ絞り込み:") { Alignment = ToolStripItemAlignment.Right };
+            var lblSearch = new ToolStripLabel("🔍:") { Alignment = ToolStripItemAlignment.Right };
+
+            // --- 時間表示モードのコンテキストメニュー ---
+            timeDisplayMenu = new ContextMenuStrip();
+            var menuSimple = new ToolStripMenuItem("実績のみ") { Tag = "Simple" };
+            var menuRemaining = new ToolStripMenuItem("残り時間表示") { Tag = "Remaining" };
+            var menuProgressBar = new ToolStripMenuItem("プログレスバー表示") { Tag = "ProgressBar" };
+
+            menuSimple.Click += modeChangeHandler; menuRemaining.Click += modeChangeHandler; menuProgressBar.Click += modeChangeHandler;
+            timeDisplayMenu.Items.AddRange(new ToolStripItem[] { menuSimple, menuRemaining, menuProgressBar });
+            timeDisplayMenu.Opening += (s, e) => {
+                if (Settings != null) {
+                    foreach (ToolStripMenuItem item in timeDisplayMenu.Items) {
+                        item.Checked = (item.Tag.ToString() == Settings.TimeDisplayMode.ToString());
+                    }
+                }
+            };
 
             toolStrip.Items.AddRange(new ToolStripItem[] {
                 btnAdd, btnAddFromTemplate, new ToolStripSeparator(),
-                btnNotifications, btnLatestReport,
-                btnQuickSettings, categoryFilterComboBox, lblCategoryFilter
+                btnNotifications,
+                btnQuickSettings,
+                searchTextBox, lblSearch
             });
 
             // --- ステータスバーの構築 ---
@@ -404,8 +563,16 @@ namespace TaskManager.Forms
             var qTitle = new Label { Text = "⚙️ クイック設定", Font = new Font("Meiryo UI", 11, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 15) };
             qFlow.Controls.Add(qTitle);
 
-            qFlow.Controls.Add(new Label { Text = "ウィンドウ透明度:", AutoSize = true });
-            qTbOpacity = new TrackBar { Minimum = 5, Maximum = 10, Width = 200, TickFrequency = 1 };
+            qFlow.Controls.Add(new Label { Text = "カテゴリ絞り込み:", AutoSize = true });
+            qCmbCategoryFilter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+            qCmbCategoryFilter.SelectedIndexChanged += (s, e) => {
+                currentCategoryFilter = qCmbCategoryFilter.SelectedItem != null ? qCmbCategoryFilter.SelectedItem.ToString() : "(すべて)";
+                UpdateAllViews();
+            };
+            qFlow.Controls.Add(qCmbCategoryFilter);
+
+            qFlow.Controls.Add(new Label { Text = "ウィンドウ透明度:", AutoSize = true, Margin = new Padding(0, 10, 0, 0) });
+            qTbOpacity = new TrackBar { Minimum = 5, Maximum = 10, Width = 200, TickFrequency = 1, LargeChange = 1 };
             qTbOpacity.ValueChanged += (s, e) => { if (Settings != null) { Settings.WindowOpacity = qTbOpacity.Value / 10.0; this.Opacity = Settings.WindowOpacity; } };
             qFlow.Controls.Add(qTbOpacity);
 
@@ -460,6 +627,15 @@ namespace TaskManager.Forms
             notificationPanel.BringToFront(); // メインコンテナ等より手前に
             quickSettingsPanel.BringToFront(); // 右端に固定するため最前面に
 
+            // ツールチップを各種コントロールに設定
+            mainToolTip.SetToolTip(qCmbCategoryFilter, "リストやカンバンで表示するタスクのカテゴリを絞り込みます");
+            mainToolTip.SetToolTip(qTbOpacity, "メインウィンドウの透明度を調整します");
+            mainToolTip.SetToolTip(qNumTimeStart, "タイムライン（カレンダー右側）の表示開始時刻を設定します");
+            mainToolTip.SetToolTip(qNumTimeEnd, "タイムライン（カレンダー右側）の表示終了時刻を設定します");
+            mainToolTip.SetToolTip(qCmbDensity, "リスト表示の行の高さを切り替えます");
+            mainToolTip.SetToolTip(qChkKanbanDone, "カンバンボードに「完了済み」の列を表示するかどうかを切り替えます");
+            mainToolTip.SetToolTip(qNumPomodoro, "作業記録中に、ここで設定した時間(分)ごとに休憩を促す通知を出します");
+
             // --- タブコントロール ---
             tabControl = new TabControl
             {
@@ -487,7 +663,9 @@ namespace TaskManager.Forms
                 ReadOnly = true,
                 CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
-                ColumnHeadersHeight = 32
+                ColumnHeadersHeight = 36,
+                BackgroundColor = SystemColors.Window,
+                BorderStyle = BorderStyle.None
             };
             taskDataGridView.RowTemplate.Height = 28; // 行の高さを少し広げて見やすく
             
@@ -498,12 +676,15 @@ namespace TaskManager.Forms
             taskDataGridView.CellMouseDown += TaskDataGridView_CellMouseDown;
             taskDataGridView.MouseMove += TaskDataGridView_MouseMove;
             taskDataGridView.KeyDown += TaskDataGridView_KeyDown;
+            taskDataGridView.ColumnHeaderMouseClick += TaskDataGridView_ColumnHeaderMouseClick;
             
             // --- リストのスクロール時のちらつき（Flickering）を防止 ---
             typeof(DataGridView).InvokeMember("DoubleBuffered", 
                 System.Reflection.BindingFlags.SetProperty | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, 
                 null, taskDataGridView, new object[] { true });
+
             listTabPage.Controls.Add(taskDataGridView);
+            taskDataGridView.BringToFront(); // データグリッドが下部に伸びるように並び順を調整
 
             // --- DataGridView 右クリックメニューの構築 ---
             dgvContextMenu = new ContextMenuStrip();
@@ -698,29 +879,6 @@ namespace TaskManager.Forms
             }
         }
 
-        private Dictionary<string, string> GetHolidays()
-        {
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "holidays.json");
-            if (File.Exists(path))
-            {
-                try
-                {
-                    var loaded = dataService.LoadFromJson<Dictionary<string, string>>(path, new Dictionary<string, string>());
-                    if (loaded != null && loaded.Count > 0) return loaded;
-                }
-                catch { }
-            }
-
-            return new Dictionary<string, string>
-            {
-                { "2026-01-01", "元日" }, { "2026-01-12", "成人の日" }, { "2026-02-11", "建国記念の日" }, { "2026-02-23", "天皇誕生日" },
-                { "2026-03-20", "春分の日" }, { "2026-04-29", "昭和の日" }, { "2026-05-03", "憲法記念日" }, { "2026-05-04", "みどりの日" },
-                { "2026-05-05", "こどもの日" }, { "2026-05-06", "振替休日" }, { "2026-07-20", "海の日" }, { "2026-08-11", "山の日" },
-                { "2026-09-21", "敬老の日" }, { "2026-09-22", "国民の休日" }, { "2026-09-23", "秋分の日" }, { "2026-10-12", "スポーツの日" },
-                { "2026-11-03", "文化の日" }, { "2026-11-23", "勤労感謝の日" }
-            };
-        }
-
         private DateTime GetNotifyDate(DateTime dueDate, string notificationSetting)
         {
             if (string.IsNullOrEmpty(notificationSetting) || notificationSetting == "全体設定に従う")
@@ -838,6 +996,12 @@ namespace TaskManager.Forms
 
         private void NotificationTimer_Tick(object sender, EventArgs e)
         {
+            // タイムラインの現在時刻線を1分ごとに自動更新
+            if (tabControl.SelectedTab == calendarTabPage && timelinePanel != null && timelinePanel.Visible)
+            {
+                timelinePanel.Invalidate();
+            }
+
             if (Settings != null && Settings.EventNotificationEnabled)
             {
                 DateTime now = DateTime.Now;
@@ -942,11 +1106,14 @@ namespace TaskManager.Forms
                 listBox.DrawItem += KanbanListBox_DrawItem;
                 listBox.MouseDown += KanbanListBox_MouseDown;
                 listBox.MouseMove += KanbanListBox_MouseMove;
+                listBox.MouseLeave += KanbanListBox_MouseLeave;
                 listBox.DragEnter += KanbanListBox_DragEnter;
+                listBox.DragLeave += KanbanListBox_DragLeave;
                 listBox.DragDrop += KanbanListBox_DragDrop;
                 listBox.KeyDown += KanbanListBox_KeyDown;
                 kanbanLayout.Controls.Add(listBox, i, 1);
                 kanbanLists[status] = listBox;
+                kanbanHoveredIndices[status] = -1;
             }
         }
 
@@ -1027,6 +1194,7 @@ namespace TaskManager.Forms
             
             timelinePanel.MouseDown += TimelinePanel_MouseDown;
             timelinePanel.MouseMove += TimelinePanel_MouseMove;
+            timelinePanel.MouseLeave += TimelinePanel_MouseLeave;
             timelinePanel.MouseUp += TimelinePanel_MouseUp;
             timelinePanel.MouseDoubleClick += TimelinePanel_MouseDoubleClick;
             timelinePanel.MouseClick += TimelinePanel_MouseClick;
@@ -1144,6 +1312,15 @@ namespace TaskManager.Forms
 
         private void UpdateTheme()
         {
+            if (mainToolTip != null)
+            {
+                mainToolTip.Active = Settings == null || Settings.ShowTooltips;
+            }
+            if (mainMenu != null)
+            {
+                mainMenu.ShowItemToolTips = Settings == null || Settings.ShowTooltips;
+            }
+
             ThemeManager.ApplyTheme(this, isDarkMode);
 
             // ?? ウィンドウの「上の白枠」（タイトルバー）を完全にダークモードにする処理
@@ -1165,6 +1342,7 @@ namespace TaskManager.Forms
                 mainMenu.Renderer = new DarkModeRenderer();
                 toolStrip.Renderer = new DarkModeRenderer();
                 statusBar.Renderer = new DarkModeRenderer();
+                timeDisplayMenu.Renderer = new DarkModeRenderer();
                 mainMenu.BackColor = darkBg; toolStrip.BackColor = darkBg; statusBar.BackColor = darkBg;
                 mainMenu.ForeColor = darkText; toolStrip.ForeColor = darkText; statusBar.ForeColor = darkText;
 
@@ -1180,6 +1358,19 @@ namespace TaskManager.Forms
                     calendarLeftSplitContainer.Panel2.BackColor = darkSurface;
                 }
 
+            if (quickSettingsPanel != null) {
+                quickSettingsPanel.BackColor = darkSurface;
+                quickSettingsPanel.ForeColor = darkText;
+            }
+            if (qCmbCategoryFilter != null) {
+                qCmbCategoryFilter.BackColor = darkBg;
+                qCmbCategoryFilter.ForeColor = darkText;
+            }
+            if (qCmbDensity != null) {
+                qCmbDensity.BackColor = darkBg;
+                qCmbDensity.ForeColor = darkText;
+            }
+
                 if (fileListView != null) {
                     fileListView.BackColor = darkSurface;
                     fileListView.ForeColor = darkText;
@@ -1192,6 +1383,10 @@ namespace TaskManager.Forms
                     taskDataGridView.ColumnHeadersDefaultCellStyle.ForeColor = darkText;
                     taskDataGridView.ColumnHeadersDefaultCellStyle.SelectionBackColor = darkBg;
                     taskDataGridView.ColumnHeadersDefaultCellStyle.SelectionForeColor = darkText;
+                    taskDataGridView.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(40, 40, 43);
+                    taskDataGridView.DefaultCellStyle.BackColor = darkSurface;
+                    taskDataGridView.DefaultCellStyle.ForeColor = darkText;
+                    taskDataGridView.BackgroundColor = darkSurface;
                 }
             }
             else
@@ -1213,6 +1408,19 @@ namespace TaskManager.Forms
                     calendarLeftSplitContainer.Panel2.BackColor = SystemColors.Window;
                 }
 
+                if (quickSettingsPanel != null) {
+                    quickSettingsPanel.BackColor = SystemColors.Window;
+                    quickSettingsPanel.ForeColor = SystemColors.ControlText;
+                }
+                if (qCmbCategoryFilter != null) {
+                    qCmbCategoryFilter.BackColor = SystemColors.Window;
+                    qCmbCategoryFilter.ForeColor = SystemColors.WindowText;
+                }
+                if (qCmbDensity != null) {
+                    qCmbDensity.BackColor = SystemColors.Window;
+                    qCmbDensity.ForeColor = SystemColors.WindowText;
+                }
+
                 if (fileListView != null) {
                     fileListView.BackColor = SystemColors.Window;
                     fileListView.ForeColor = SystemColors.WindowText;
@@ -1225,6 +1433,7 @@ namespace TaskManager.Forms
                     taskDataGridView.ColumnHeadersDefaultCellStyle.ForeColor = SystemColors.ControlText;
                     taskDataGridView.ColumnHeadersDefaultCellStyle.SelectionBackColor = SystemColors.Control;
                     taskDataGridView.ColumnHeadersDefaultCellStyle.SelectionForeColor = SystemColors.ControlText;
+                    taskDataGridView.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(245, 245, 245);
                 }
             }
 
@@ -1273,22 +1482,22 @@ namespace TaskManager.Forms
 
         private void UpdateCategoryFilterComboBox()
         {
-            categoryFilterComboBox.Items.Clear();
-            categoryFilterComboBox.Items.Add("(すべて)");
+            qCmbCategoryFilter.Items.Clear();
+            qCmbCategoryFilter.Items.Add("(すべて)");
             if (Categories != null)
             {
                 foreach (var cat in Categories.Keys.OrderBy(k => k))
                 {
-                    categoryFilterComboBox.Items.Add(cat);
+                    qCmbCategoryFilter.Items.Add(cat);
                 }
             }
-            if (categoryFilterComboBox.Items.Contains(currentCategoryFilter))
+            if (qCmbCategoryFilter.Items.Contains(currentCategoryFilter))
             {
-                categoryFilterComboBox.SelectedItem = currentCategoryFilter;
+                qCmbCategoryFilter.SelectedItem = currentCategoryFilter;
             }
             else
             {
-                categoryFilterComboBox.SelectedIndex = 0;
+                qCmbCategoryFilter.SelectedIndex = 0;
                 currentCategoryFilter = "(すべて)";
             }
         }
@@ -1350,7 +1559,7 @@ namespace TaskManager.Forms
             taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "DueDate", HeaderText = "期日", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells, MinimumWidth = 100 });
             taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Progress", HeaderText = "進捗", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells, MinimumWidth = 100 });
             taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Priority", HeaderText = "優先度", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells, MinimumWidth = 60 });
-            taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "TrackedTime", HeaderText = "実績", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells, MinimumWidth = 80 });
+            taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "TrackedTime", HeaderText = "実績 / 目標", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells, MinimumWidth = 200 });
             taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Category", HeaderText = "カテゴリ", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, FillWeight = 15, MinimumWidth = 100 });
             taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "SubCategory", HeaderText = "サブカテゴリ", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, FillWeight = 15, MinimumWidth = 100 });
             taskDataGridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "RecordAction", HeaderText = "記録操作", AutoSizeMode = DataGridViewAutoSizeColumnMode.AllCells, MinimumWidth = 80 });
@@ -1367,6 +1576,13 @@ namespace TaskManager.Forms
             if (totalSeconds <= 0) return "";
             var ts = TimeSpan.FromSeconds(totalSeconds);
             return string.Format("{0:D2}:{1:D2}:{2:D2}", (int)ts.TotalHours, ts.Minutes, ts.Seconds);
+        }
+
+        private Color GetContrastTextColor(Color bgColor)
+        {
+            // YIQ方程式を利用した輝度計算
+            double yiq = ((bgColor.R * 299) + (bgColor.G * 587) + (bgColor.B * 114)) / 1000.0;
+            return (yiq >= 128) ? Color.Black : Color.White;
         }
 
         private class DataGridViewSelectionState
@@ -1432,6 +1648,14 @@ namespace TaskManager.Forms
             {
                 tasksToDisplay = tasksToDisplay.Where(t => t.カテゴリ == currentCategoryFilter);
             }
+            if (!string.IsNullOrWhiteSpace(currentSearchKeyword))
+            {
+                tasksToDisplay = tasksToDisplay.Where(t => 
+                    (t.タスク != null && t.タスク.ToLower().Contains(currentSearchKeyword)) ||
+                    (t.カテゴリ != null && t.カテゴリ.ToLower().Contains(currentSearchKeyword)) ||
+                    (t.サブカテゴリ != null && t.サブカテゴリ.ToLower().Contains(currentSearchKeyword))
+                );
+            }
             return tasksToDisplay;
         }
 
@@ -1441,12 +1665,13 @@ namespace TaskManager.Forms
             {
                 { "未実施", 0 }, { "保留", 0 }, { "実施中", 50 }, { "確認待ち", 75 }, { "完了済み", 100 }
             };
-            var tasksGrouped = tasksToDisplay.GroupBy(t => t.ProjectID).ToList();
+            
+            // ToLookup を使用して検索の計算量を O(1) に削減（高速化）
+            var tasksGrouped = tasksToDisplay.ToLookup(t => t.ProjectID ?? "");
 
             foreach (var project in Projects.OrderBy(p => p.ProjectName))
             {
-                var group = tasksGrouped.FirstOrDefault(g => g.Key == project.ProjectID);
-                var projectTasks = group != null ? group.ToList() : new List<TaskItem>();
+                var projectTasks = tasksGrouped[project.ProjectID].ToList();
 
                 AddProjectRowToGrid(project, projectTasks, progressMapping, rowHeight);
 
@@ -1499,6 +1724,15 @@ namespace TaskManager.Forms
             var row = taskDataGridView.Rows[rowIndex];
             row.Height = rowHeight;
             row.Tag = project;
+
+            if (Settings == null || Settings.ShowTooltips)
+            {
+                string tooltip = string.Format("プロジェクト: {0}\n期日: {1}\n目標時間: {2}h", project.ProjectName, project.ProjectDueDate, project.TargetHours);
+                foreach (DataGridViewCell cell in row.Cells)
+                {
+                    cell.ToolTipText = tooltip;
+                }
+            }
             row.DefaultCellStyle.Font = new Font("Meiryo UI", 9, FontStyle.Bold);
             row.DefaultCellStyle.BackColor = isDarkMode ? Color.FromArgb(58, 58, 62) : Color.LightGray;
         }
@@ -1537,6 +1771,7 @@ namespace TaskManager.Forms
             bool showIcons = Settings == null || Settings.ShowIcons;
             string priorityStr = task.優先度;
             if (showIcons) priorityStr = task.優先度 == "高" ? "🔺高" : (task.優先度 == "低" ? "⏬低" : task.優先度);
+            
 
             int tIndex = taskDataGridView.Rows.Add(
                 "    " + task.タスク,
@@ -1553,11 +1788,28 @@ namespace TaskManager.Forms
             tRow.Height = rowHeight;
             tRow.Tag = task;
 
+            if (Settings == null || Settings.ShowTooltips)
+            {
+                string tooltip = string.Format("タスク: {0}\n期日: {1}\n進捗: {2}\n優先度: {3}\nカテゴリ: {4}\nサブカテゴリ: {5}",
+                    task.タスク, task.期日, task.進捗度, task.優先度, task.カテゴリ, task.サブカテゴリ);
+                foreach (DataGridViewCell cell in tRow.Cells)
+                {
+                    cell.ToolTipText = tooltip;
+                }
+            }
+
             if (task.進捗度 == "完了済み")
             {
                 tRow.Cells["RecordAction"].Value = "";
-                tRow.DefaultCellStyle.Font = new Font("Meiryo UI", 9, FontStyle.Strikeout);
-                tRow.DefaultCellStyle.ForeColor = Color.Gray;
+                if (Settings == null || Settings.ShowStrikethrough)
+                {
+                    tRow.DefaultCellStyle.Font = new Font("Meiryo UI", 9, FontStyle.Strikeout);
+                }
+                else
+                {
+                    tRow.DefaultCellStyle.Font = new Font("Meiryo UI", 9, FontStyle.Regular);
+                }
+                tRow.DefaultCellStyle.ForeColor = isColorVisionSupport ? (isDarkMode ? Color.Silver : Color.DimGray) : Color.Gray;
             }
             else
             {
@@ -1565,7 +1817,7 @@ namespace TaskManager.Forms
                 
                 if (task.優先度 == "高")
                 {
-                    tRow.DefaultCellStyle.BackColor = isColorVisionSupport ? (isDarkMode ? Color.FromArgb(90, 45, 0) : Color.FromArgb(255, 230, 210)) : (isDarkMode ? Color.FromArgb(60, 60, 0) : Color.LightYellow);
+                    tRow.DefaultCellStyle.BackColor = isColorVisionSupport ? (isDarkMode ? Color.FromArgb(90, 45, 0) : Color.FromArgb(255, 230, 210)) : (isDarkMode ? Color.FromArgb(90, 30, 30) : Color.LightYellow);
                 }
 
                 DateTime dueDate = DateTime.MinValue;
@@ -1591,6 +1843,8 @@ namespace TaskManager.Forms
             if (taskDataGridView == null) return;
 
             var selectionState = SaveDataGridViewSelection();
+
+            taskDataGridView.ShowCellToolTips = Settings == null || Settings.ShowTooltips;
 
             taskDataGridView.SuspendLayout();
             try
@@ -1677,6 +1931,14 @@ namespace TaskManager.Forms
             {
                 tasksToDisplay = tasksToDisplay.Where(t => t.カテゴリ == currentCategoryFilter);
             }
+            if (!string.IsNullOrWhiteSpace(currentSearchKeyword))
+            {
+                tasksToDisplay = tasksToDisplay.Where(t => 
+                    (t.タスク != null && t.タスク.ToLower().Contains(currentSearchKeyword)) ||
+                    (t.カテゴリ != null && t.カテゴリ.ToLower().Contains(currentSearchKeyword)) ||
+                    (t.サブカテゴリ != null && t.サブカテゴリ.ToLower().Contains(currentSearchKeyword))
+                );
+            }
 
             foreach (var task in tasksToDisplay)
             {
@@ -1690,6 +1952,12 @@ namespace TaskManager.Forms
         // --- Undo (Ctrl+Z) キーボードショートカットの処理 ---
         private void FormMain_KeyDown(object sender, KeyEventArgs e)
         {
+            // テキスト入力中の標準のUndoを妨害しないようにする
+            if (this.ActiveControl is TextBoxBase || this.ActiveControl is ComboBox)
+            {
+                return;
+            }
+
             if (e.Control && e.KeyCode == Keys.Z)
             {
                 if (undoStack.Count > 0)
@@ -1760,6 +2028,7 @@ namespace TaskManager.Forms
             if (newStatus == "完了済み")
             {
                 if (string.IsNullOrEmpty(task.完了日)) task.完了日 = DateTime.Now.ToString("yyyy-MM-dd");
+                task.CompletedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
                 if (Settings != null && Settings.EnableSoundEffects)
                 {
@@ -1769,6 +2038,11 @@ namespace TaskManager.Forms
             else
             {
                 task.完了日 = "";
+                task.CompletedAt = "";
+                if (newStatus == "実施中" && string.IsNullOrEmpty(task.StartedAt))
+                {
+                    task.StartedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                }
             }
             task.進捗度 = newStatus;
             
@@ -1869,6 +2143,7 @@ namespace TaskManager.Forms
                     if (form.ShowDialog(this) == DialogResult.OK)
                     {
                         dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                        UpdateCategoryFilterComboBox();
                         UpdateAllViews();
                     }
                 }
@@ -1885,6 +2160,26 @@ namespace TaskManager.Forms
                     taskDataGridView.ClearSelection();
                     taskDataGridView.Rows[e.RowIndex].Selected = true;
                     try { taskDataGridView.CurrentCell = taskDataGridView.Rows[e.RowIndex].Cells[e.ColumnIndex]; } catch { }
+                }
+            }
+        }
+
+        private void TaskDataGridView_ColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            // ヘッダーが右クリックされた場合
+            if (e.Button == MouseButtons.Right && e.RowIndex == -1)
+            {
+                if (taskDataGridView.Columns[e.ColumnIndex].Name == "TrackedTime")
+                {
+                    if (Settings != null)
+                    {
+                        foreach (ToolStripMenuItem item in timeDisplayMenu.Items)
+                        {
+                            item.Checked = (item.Tag.ToString() == Settings.TimeDisplayMode.ToString());
+                        }
+                    }
+                    Rectangle headerRect = taskDataGridView.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, true);
+                    timeDisplayMenu.Show(taskDataGridView, headerRect.Left + e.X, headerRect.Top + e.Y);
                 }
             }
         }
@@ -1953,6 +2248,7 @@ namespace TaskManager.Forms
                 if (form.ShowDialog(this) == DialogResult.OK)
                 {
                     dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                    UpdateCategoryFilterComboBox();
                     UpdateAllViews();
                 }
             }
@@ -1963,6 +2259,25 @@ namespace TaskManager.Forms
             if (e.KeyCode == Keys.Delete && taskDataGridView.SelectedRows.Count > 0)
             {
                 DgvDeleteMenuItem_Click(sender, EventArgs.Empty);
+            }
+            else if (e.KeyCode == Keys.Space && taskDataGridView.SelectedRows.Count > 0)
+            {
+                var task = taskDataGridView.SelectedRows[0].Tag as TaskItem;
+                if (task != null)
+                {
+                    string nextStatus;
+                    if (task.進捗度 == "未実施") nextStatus = "実施中";
+                    else if (task.進捗度 == "実施中") nextStatus = "完了済み";
+                    else if (task.進捗度 == "完了済み") nextStatus = "未実施";
+                    else nextStatus = "実施中"; // 「保留」や「確認待ち」などその他の場合は実施中へ
+
+                    UpdateTaskStatus(task, nextStatus);
+                    UpdateAllViews();
+                }
+
+                // Spaceキーによるデフォルトのスクロールや選択解除などの動作を安全に防ぐ
+                e.Handled = true;
+                e.SuppressKeyPress = true;
             }
         }
 
@@ -2109,6 +2424,7 @@ namespace TaskManager.Forms
                 }
                 AllTasks.Add(form.ResultTask);
                 dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                UpdateCategoryFilterComboBox();
                 UpdateAllViews();
             }
         }
@@ -2211,7 +2527,7 @@ namespace TaskManager.Forms
 
             int weekStart = Settings != null ? Settings.CalendarWeekStart : 0;
             bool colorWeekend = Settings != null ? Settings.ColorWeekend : true;
-            var holidays = GetHolidays();
+            var holidays = dataService.GetHolidays();
 
             string[] daysOfWeek = System.Globalization.CultureInfo.CurrentCulture.DateTimeFormat.AbbreviatedDayNames;
             for (int i = 0; i < 7; i++)
@@ -2290,16 +2606,36 @@ namespace TaskManager.Forms
 
                     if (type == "Task" && item is TaskItem) {
                         var task = (TaskItem)item; DateTime originalTime = dropDate;
+                        string oldDueDate = task.期日;
                         DateTime d;
                         if (!string.IsNullOrEmpty(task.期日) && DateTime.TryParse(task.期日, out d)) originalTime = dropDate.Date.Add(d.TimeOfDay);
-                        task.期日 = originalTime.ToString("yyyy-MM-dd HH:mm"); dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                        task.期日 = originalTime.ToString("yyyy-MM-dd HH:mm"); 
+                        
+                        undoStack.Push(new GenericUndoCommand(() => {
+                            task.期日 = oldDueDate;
+                            dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                            UpdateAllViews();
+                        }));
+                        
+                        dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
                     } else if (type == "Project" && item is ProjectItem) {
                         var proj = (ProjectItem)item; DateTime originalTime = dropDate;
+                        string oldDueDate = proj.ProjectDueDate;
                         DateTime d;
                         if (!string.IsNullOrEmpty(proj.ProjectDueDate) && DateTime.TryParse(proj.ProjectDueDate, out d)) originalTime = dropDate.Date.Add(d.TimeOfDay);
-                        proj.ProjectDueDate = originalTime.ToString("yyyy-MM-dd HH:mm"); dataService.SaveToJson(dataService.ProjectsFile, Projects);
+                        proj.ProjectDueDate = originalTime.ToString("yyyy-MM-dd HH:mm"); 
+                        
+                        undoStack.Push(new GenericUndoCommand(() => {
+                            proj.ProjectDueDate = oldDueDate;
+                            dataService.SaveToJson(dataService.ProjectsFile, Projects);
+                            UpdateAllViews();
+                        }));
+                        
+                        dataService.SaveToJson(dataService.ProjectsFile, Projects);
                     } else if (type == "Event" && item is EventItem) {
                         var evt = (EventItem)item;
+                        string oldStartTime = evt.StartTime;
+                        string oldEndTime = evt.EndTime;
                         DateTime oldStart;
                         if (DateTime.TryParse(evt.StartTime, out oldStart)) {
                             TimeSpan duration = TimeSpan.FromHours(1); 
@@ -2311,7 +2647,27 @@ namespace TaskManager.Forms
                                 if (!AllEvents.ContainsKey(newDateStr)) AllEvents[newDateStr] = new List<EventItem>();
                                 AllEvents[newDateStr].Add(evt);
                             }
-                            evt.StartTime = newStart.ToString("o"); evt.EndTime = newEnd.ToString("o"); dataService.SaveToJson(dataService.EventsFile, AllEvents);
+                            evt.StartTime = newStart.ToString("o"); evt.EndTime = newEnd.ToString("o"); 
+                            
+                            undoStack.Push(new GenericUndoCommand(() => {
+                                string currentSt = evt.StartTime;
+                                evt.StartTime = oldStartTime;
+                                evt.EndTime = oldEndTime;
+                                DateTime oSt, cSt;
+                                if (DateTime.TryParse(oldStartTime, out oSt) && DateTime.TryParse(currentSt, out cSt)) {
+                                    string restNewDateStr = cSt.ToString("yyyy-MM-dd");
+                                    string restOldDateStr = oSt.ToString("yyyy-MM-dd");
+                                    if (restNewDateStr != restOldDateStr) {
+                                        if (AllEvents.ContainsKey(restNewDateStr)) AllEvents[restNewDateStr].Remove(evt);
+                                        if (!AllEvents.ContainsKey(restOldDateStr)) AllEvents[restOldDateStr] = new List<EventItem>();
+                                        AllEvents[restOldDateStr].Add(evt);
+                                    }
+                                }
+                                dataService.SaveToJson(dataService.EventsFile, AllEvents);
+                                UpdateAllViews();
+                            }));
+                            
+                            dataService.SaveToJson(dataService.EventsFile, AllEvents);
                         }
                     }
                     UpdateAllViews();
@@ -2324,7 +2680,7 @@ namespace TaskManager.Forms
             var panel = sender as Panel;
             DateTime date = (DateTime)panel.Tag;
             string dateStr = date.ToString("yyyy-MM-dd");
-            var holidays = GetHolidays();
+            var holidays = dataService.GetHolidays();
             bool isHoliday = holidays.ContainsKey(dateStr);
             var g = e.Graphics;
             var rect = panel.ClientRectangle;
@@ -2347,6 +2703,7 @@ namespace TaskManager.Forms
             int currentY = 20; int lineHeight = 14;
             using (var sfItem = new StringFormat { Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
             using (var itemFont = new Font("Meiryo UI", 8.25f))
+            using (var strikeFont = new Font("Meiryo UI", 8.25f, FontStyle.Strikeout))
             using (var eventBrush = new SolidBrush(ThemeManager.GetEventColor(isDarkMode, isColorVisionSupport)))
             using (var projBrush = new SolidBrush(ThemeManager.GetProjectColor(isDarkMode, isColorVisionSupport)))
             using (var taskBrush = new SolidBrush(ThemeManager.GetTaskColor(isDarkMode, isColorVisionSupport)))
@@ -2375,7 +2732,9 @@ namespace TaskManager.Forms
                     if (DateTime.TryParse(task.期日, out tDue) && tDue.Date < DateTime.Today) isOverdue = true;
                     bool showIcons = Settings == null || Settings.ShowIcons;
                     string prefix = (isOverdue && (isColorVisionSupport || showIcons)) ? "[⚠️T] " : "[T] ";
-                    g.DrawString(string.Format("{0}{1}", prefix, task.タスク), itemFont, taskBrush, new RectangleF(5, currentY, rect.Width - 7, lineHeight), sfItem);
+                    
+                    bool useStrikethrough = task.進捗度 == "完了済み" && (Settings == null || Settings.ShowStrikethrough);
+                    g.DrawString(string.Format("{0}{1}", prefix, task.タスク), useStrikethrough ? strikeFont : itemFont, taskBrush, new RectangleF(5, currentY, rect.Width - 7, lineHeight), sfItem);
                     currentY += lineHeight;
                 }
             }
@@ -2453,6 +2812,7 @@ namespace TaskManager.Forms
                         ThemeManager.ApplyTheme(form, isDarkMode);
                         if (form.ShowDialog(this) == DialogResult.OK) {
                             dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                            UpdateCategoryFilterComboBox();
                             UpdateAllViews();
                         }
                     }
@@ -2543,6 +2903,16 @@ namespace TaskManager.Forms
             ctx.Items.Add(deleteMenu);
             card.ContextMenuStrip = ctx;
 
+            if (mainToolTip != null && (Settings == null || Settings.ShowTooltips))
+            {
+                string tooltip = string.Format("{0}\n{1}", title, details);
+                mainToolTip.SetToolTip(card, tooltip);
+                foreach (Control child in card.Controls)
+                {
+                    mainToolTip.SetToolTip(child, tooltip);
+                }
+            }
+
             return card;
         }
 
@@ -2612,6 +2982,12 @@ namespace TaskManager.Forms
             Color textColor = isSelected ? SystemColors.HighlightText : listBox.ForeColor;
             Color subTextColor = isSelected ? SystemColors.HighlightText : (isDarkMode ? Color.Silver : Color.DimGray);
 
+            if (task.進捗度 == "完了済み" && !isSelected)
+            {
+                textColor = isColorVisionSupport ? (isDarkMode ? Color.Silver : Color.DimGray) : Color.Gray;
+                subTextColor = textColor;
+            }
+
             // 描画領域の計算
             Rectangle cardBounds = new Rectangle(e.Bounds.X + 2, e.Bounds.Y + 2, e.Bounds.Width - 4, e.Bounds.Height - 4);
 
@@ -2620,19 +2996,33 @@ namespace TaskManager.Forms
             if (!isSelected)
             {
                 Color cardBackColor = isDarkMode ? Color.FromArgb(45, 45, 48) : SystemColors.Window;
-                using (var cardBackBrush = new SolidBrush(cardBackColor)) g.FillRectangle(cardBackBrush, cardBounds);
+                
+                if (isColorVisionSupport && task.進捗度 == "完了済み")
+                {
+                    // 色覚サポート：完了済みの場合はカード背景に斜線パターンを描画して視覚的に区別する
+                    Color hatchColor = isDarkMode ? Color.FromArgb(80, 80, 85) : Color.FromArgb(220, 220, 220);
+                    using (var cardBackBrush = new System.Drawing.Drawing2D.HatchBrush(System.Drawing.Drawing2D.HatchStyle.WideUpwardDiagonal, hatchColor, cardBackColor))
+                    {
+                        g.FillRectangle(cardBackBrush, cardBounds);
+                    }
+                }
+                else
+                {
+                    using (var cardBackBrush = new SolidBrush(cardBackColor)) g.FillRectangle(cardBackBrush, cardBounds);
+                }
             }
 
-            using (var borderPen = new Pen(Color.FromArgb(220, 220, 220))) g.DrawRectangle(borderPen, cardBounds);
+            using (var borderPen = new Pen(isDarkMode ? Color.FromArgb(80, 80, 80) : Color.FromArgb(220, 220, 220))) g.DrawRectangle(borderPen, cardBounds);
             using (var projectColorBrush = new SolidBrush(projectColor)) g.FillRectangle(projectColorBrush, cardBounds.X, cardBounds.Y, 4, cardBounds.Height);
 
             int leftMargin = cardBounds.X + 10;
             int topMargin = cardBounds.Y + 5;
             int contentWidth = Math.Max(1, cardBounds.Width - 15);
 
+            bool useStrikethrough = task.進捗度 == "完了済み" && (Settings == null || Settings.ShowStrikethrough);
             using (var textBrush = new SolidBrush(textColor))
             using (var subTextBrush = new SolidBrush(subTextColor))
-            using (var taskFont = new Font("Meiryo UI", 9, FontStyle.Bold))
+            using (var taskFont = new Font("Meiryo UI", 9, useStrikethrough ? (FontStyle.Bold | FontStyle.Strikeout) : FontStyle.Bold))
             using (var projectFont = new Font("Meiryo UI", 8))
             using (var priorityFont = new Font("Meiryo UI", 8, FontStyle.Bold))
             {
@@ -2641,7 +3031,7 @@ namespace TaskManager.Forms
 
                 bool showIcons = Settings == null || Settings.ShowIcons;
                 string priorityText = string.Format("優先度: {0}", showIcons ? (task.優先度 == "高" ? "🔺高" : (task.優先度 == "低" ? "⏬低" : task.優先度)) : task.優先度);
-                Color priorityColor = ThemeManager.GetPriorityColor(task.優先度, isDarkMode, isColorVisionSupport);
+                Color priorityColor = (task.進捗度 == "完了済み" && !isSelected) ? textColor : ThemeManager.GetPriorityColor(task.優先度, isDarkMode, isColorVisionSupport);
                 SizeF prioritySize = g.MeasureString(priorityText, priorityFont);
                 float priorityY = cardBounds.Bottom - prioritySize.Height - 3;
 
@@ -3041,9 +3431,9 @@ namespace TaskManager.Forms
         {
             using (var form = new Form { Text = "メモ", Width = 400, Height = 300, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false })
             {
-                var textMemo = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Top, Height = 210, Text = existingText };
+                var textMemo = new TextBox { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Top, Height = 210, Text = existingText };
                 form.Controls.Add(textMemo);
-                var btnOK = new Button { Text = "OK", Location = new Point(110, 225), DialogResult = DialogResult.OK };
+                var btnOK = new Button { Text = "保存", Location = new Point(110, 225), DialogResult = DialogResult.OK };
                 var btnCancel = new Button { Text = "キャンセル", Location = new Point(200, 225), DialogResult = DialogResult.Cancel };
                 form.Controls.AddRange(new Control[] { btnOK, btnCancel });
                 form.AcceptButton = btnOK; form.CancelButton = btnCancel; form.ActiveControl = textMemo;
@@ -3122,6 +3512,7 @@ namespace TaskManager.Forms
                     if (form.ShowDialog(this) == DialogResult.OK)
                     {
                         dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                        UpdateCategoryFilterComboBox();
                         UpdateAllViews();
                     }
                 }
@@ -3168,48 +3559,119 @@ namespace TaskManager.Forms
 
         private void KanbanListBox_MouseDown(object sender, MouseEventArgs e)
         {
+            ListBox lb = sender as ListBox;
+            if (lb == null) return;
+
+            foreach (var otherLb in kanbanLists.Values)
+            {
+                if (otherLb != lb)
+                {
+                    otherLb.ClearSelected();
+                }
+            }
+
             if (e.Button == MouseButtons.Left)
             {
-                ListBox lb = sender as ListBox;
                 int index = lb.IndexFromPoint(e.Location);
                 if (index != ListBox.NoMatches)
                 {
                     kanbanDragTask = lb.Items[index] as TaskItem;
                     kanbanDragStartPoint = e.Location;
+                    lb.SelectedIndex = index;
                 }
                 else
                 {
                     kanbanDragTask = null;
                 }
             }
+            else if (e.Button == MouseButtons.Right)
+            {
+                int index = lb.IndexFromPoint(e.Location);
+                if (index != ListBox.NoMatches)
+                {
+                    lb.SelectedIndex = index;
+                }
+            }
         }
 
         private void KanbanListBox_MouseMove(object sender, MouseEventArgs e)
         {
+            ListBox lb = sender as ListBox;
+            string status = lb.Tag as string;
+
+            if (Settings == null || Settings.ShowTooltips)
+            {
+                int index = lb.IndexFromPoint(e.Location);
+                int prevIndex = kanbanHoveredIndices.ContainsKey(status) ? kanbanHoveredIndices[status] : -1;
+                
+                if (index != prevIndex)
+                {
+                    kanbanHoveredIndices[status] = index;
+                    if (index >= 0)
+                    {
+                        var task = lb.Items[index] as TaskItem;
+                        if (task != null)
+                        {
+                            string tooltip = string.Format("タスク: {0}\n期日: {1}\n進捗: {2}\n優先度: {3}\nカテゴリ: {4}\nサブカテゴリ: {5}",
+                                task.タスク, task.期日, task.進捗度, task.優先度, task.カテゴリ, task.サブカテゴリ);
+                            mainToolTip.SetToolTip(lb, tooltip);
+                        }
+                    }
+                    else
+                    {
+                        mainToolTip.SetToolTip(lb, "");
+                    }
+                }
+            }
+
             if (e.Button == MouseButtons.Left && kanbanDragTask != null)
             {
                 Size dragSize = SystemInformation.DragSize;
                 if (Math.Abs(e.X - kanbanDragStartPoint.X) > dragSize.Width ||
                     Math.Abs(e.Y - kanbanDragStartPoint.Y) > dragSize.Height)
                 {
-                    ListBox lb = sender as ListBox;
                     lb.DoDragDrop(kanbanDragTask, DragDropEffects.Move);
                     kanbanDragTask = null; // ドラッグ開始後にリセット
                 }
             }
         }
 
+        private void KanbanListBox_MouseLeave(object sender, EventArgs e)
+        {
+            ListBox lb = sender as ListBox;
+            string status = lb != null ? lb.Tag as string : null;
+            if (status != null && kanbanHoveredIndices.ContainsKey(status)) kanbanHoveredIndices[status] = -1;
+            if (mainToolTip != null && lb != null) mainToolTip.SetToolTip(lb, "");
+        }
+
         private void KanbanListBox_DragEnter(object sender, DragEventArgs e)
         {
-            e.Effect = e.Data.GetDataPresent(typeof(TaskItem)) ? DragDropEffects.Move : DragDropEffects.None;
+            if (e.Data.GetDataPresent(typeof(TaskItem)))
+            {
+                e.Effect = DragDropEffects.Move;
+                var lb = sender as ListBox;
+                if (lb != null) lb.BackColor = isDarkMode ? Color.FromArgb(60, 60, 65) : Color.LightCyan;
+            }
+            else
+            {
+                e.Effect = DragDropEffects.None;
+            }
+        }
+
+        private void KanbanListBox_DragLeave(object sender, EventArgs e)
+        {
+            var lb = sender as ListBox;
+            if (lb != null) lb.BackColor = isDarkMode ? Color.FromArgb(30, 30, 30) : SystemColors.Window;
         }
 
         private void KanbanListBox_DragDrop(object sender, DragEventArgs e)
         {
+            var targetListBox = sender as ListBox;
+            if (targetListBox != null) targetListBox.BackColor = isDarkMode ? Color.FromArgb(30, 30, 30) : SystemColors.Window;
+
             if (e.Data.GetDataPresent(typeof(TaskItem)))
             {
                 TaskItem task = e.Data.GetData(typeof(TaskItem)) as TaskItem;
-                ListBox targetListBox = sender as ListBox;
                 string newStatus = targetListBox.Tag as string;
 
                 if (task != null && task.進捗度 != newStatus)
@@ -3245,10 +3707,11 @@ namespace TaskManager.Forms
                     Rectangle barBounds = new Rectangle(e.CellBounds.X + 2, e.CellBounds.Y + 2, barWidth, e.CellBounds.Height - 5);
                     Color barColor = percentage == 100 ? ThemeManager.GetProgressCompleteColor(isColorVisionSupport) : ThemeManager.GetProgressIncompleteColor(isColorVisionSupport);
 
-                    if (isColorVisionSupport && percentage < 100)
+                    if (isColorVisionSupport)
                     {
-                        // 色覚サポート：進行中の場合は斜線パターンで塗りつぶし、視覚的な違いを強調する
-                        using (var brush = new System.Drawing.Drawing2D.HatchBrush(System.Drawing.Drawing2D.HatchStyle.LightUpwardDiagonal, Color.FromArgb(150, 255, 255, 255), barColor))
+                        // 色覚サポート：進行中と完了済みに応じてパターンを使い分け、視覚的な違いを強調し維持する
+                        var hatchStyle = percentage == 100 ? System.Drawing.Drawing2D.HatchStyle.DarkUpwardDiagonal : System.Drawing.Drawing2D.HatchStyle.LightUpwardDiagonal;
+                        using (var brush = new System.Drawing.Drawing2D.HatchBrush(hatchStyle, Color.FromArgb(150, 255, 255, 255), barColor))
                         {
                             e.Graphics.FillRectangle(brush, barBounds);
                         }
@@ -3357,6 +3820,102 @@ namespace TaskManager.Forms
                 }
                 e.Handled = true;
             }
+            else if (dgv.Columns[e.ColumnIndex].Name == "TrackedTime" && tag != null)
+            {
+                e.Paint(e.ClipBounds, DataGridViewPaintParts.All & ~DataGridViewPaintParts.ContentForeground);
+
+                double trackedSec = 0;
+                double targetHrs = 0;
+
+                var project = tag as ProjectItem;
+
+                if (task != null)
+                {
+                    trackedSec = task.TrackedTimeSeconds;
+                    if (task.ID == currentlyTrackingTaskID && currentTaskStartTime.HasValue)
+                        trackedSec += (DateTime.Now - currentTaskStartTime.Value).TotalSeconds;
+                    targetHrs = task.TargetHours ?? 0;
+                }
+                else if (project != null)
+                {
+                    var projectTasks = AllTasks.Where(t => t.ProjectID == project.ProjectID).ToList();
+                    trackedSec = projectTasks.Sum(t => t.TrackedTimeSeconds);
+                    if (currentlyTrackingTaskID != null && projectTasks.Any(t => t.ID == currentlyTrackingTaskID) && currentTaskStartTime.HasValue)
+                    {
+                        trackedSec += (DateTime.Now - currentTaskStartTime.Value).TotalSeconds;
+                    }
+                    
+                    // プロジェクト自身に目標が設定されていればそれを使い、なければタスクの合計値を使う
+                    targetHrs = project.TargetHours.HasValue && project.TargetHours.Value > 0 
+                                ? project.TargetHours.Value 
+                                : projectTasks.Sum(t => t.TargetHours ?? 0);
+                }
+
+                double trackedHrs = trackedSec / 3600.0;
+                string displayMode = Settings != null ? Settings.TimeDisplayMode.ToString() : "Simple";
+                string displayText = "";
+                Color textColor = e.CellStyle.ForeColor;
+                TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter;
+
+                bool isTracking = (task != null && task.ID == currentlyTrackingTaskID) || 
+                                  (project != null && AllTasks.Any(t => t.ProjectID == project.ProjectID && t.ID == currentlyTrackingTaskID));
+
+                string trackingSuffix = "";
+                if (isTracking) {
+                    var ts = TimeSpan.FromSeconds(trackedSec);
+                    trackingSuffix = string.Format(" [{0:D2}:{1:D2}:{2:D2}]", (int)ts.TotalHours, ts.Minutes, ts.Seconds);
+                    textColor = isDarkMode ? Color.LightGreen : Color.DarkGreen;
+                }
+
+                if (displayMode == "Remaining")
+                {
+                    if (targetHrs > 0) {
+                        double remaining = targetHrs - trackedHrs;
+                        if (remaining >= 0) {
+                            displayText = string.Format("残り {0:F1}h", remaining);
+                        } else {
+                            displayText = string.Format("{0:F1}h 超過", Math.Abs(remaining));
+                            textColor = isDarkMode ? Color.LightCoral : Color.Red;
+                        }
+                    } else {
+                        displayText = trackedHrs > 0 ? string.Format("{0:F1}h", trackedHrs) : "-";
+                    }
+                    displayText += trackingSuffix;
+                    TextRenderer.DrawText(e.Graphics, displayText, e.CellStyle.Font ?? dgv.Font, e.CellBounds, textColor, flags);
+                }
+                else if (displayMode == "ProgressBar")
+                {
+                    if (targetHrs > 0) {
+                        double progressRatio = trackedHrs / targetHrs;
+                        double drawRatio = Math.Min(1.0, Math.Max(0.0, progressRatio));
+                        int barWidth = (int)((e.CellBounds.Width - 4) * drawRatio);
+                        
+                        Color barColor = progressRatio > 1.0 ? 
+                            (isDarkMode ? Color.FromArgb(120, Color.DarkRed) : Color.FromArgb(120, Color.LightCoral)) :
+                            (isDarkMode ? Color.FromArgb(100, Color.Teal) : Color.FromArgb(100, Color.LightBlue));
+
+                        if (barWidth > 0) {
+                            Rectangle barBounds = new Rectangle(e.CellBounds.X + 2, e.CellBounds.Y + 2, barWidth, e.CellBounds.Height - 5);
+                            using (var brush = new SolidBrush(barColor)) e.Graphics.FillRectangle(brush, barBounds);
+                        }
+                        displayText = string.Format("{0:F1}h / {1:F1}h ({2:0}%)", trackedHrs, targetHrs, progressRatio * 100);
+                        if (progressRatio > 1.0 && !isTracking) textColor = isDarkMode ? Color.LightCoral : Color.Red;
+                    } else {
+                        displayText = trackedHrs > 0 ? string.Format("{0:F1}h", trackedHrs) : "-";
+                    }
+                    displayText += trackingSuffix;
+                    TextRenderer.DrawText(e.Graphics, displayText, e.CellStyle.Font ?? dgv.Font, e.CellBounds, textColor, flags);
+                }
+                else // Simple
+                {
+                    string trackedStr = trackedSec > 0 ? FormatTrackedTime(trackedSec) : "00:00:00";
+                    // Simpleモードではすでに時間分秒形式のため、サフィックス（[00:00:00]）を二重に表示しない
+                    displayText = trackedStr;
+                    TextRenderer.DrawText(e.Graphics, displayText, e.CellStyle.Font ?? dgv.Font, e.CellBounds, textColor, flags);
+                }
+
+                e.Handled = true;
+            }
         }
 
         private void TaskDataGridView_CellClick(object sender, DataGridViewCellEventArgs e)
@@ -3454,7 +4013,7 @@ namespace TaskManager.Forms
             using (var itemTextBrush = new SolidBrush(Color.White))
             using (var linePen = new Pen(isDarkMode ? Color.FromArgb(70, 70, 70) : Color.LightGray))
             using (var separatorPen = new Pen(isDarkMode ? Color.Gray : Color.DarkGray, 2))
-            using (var textBrush = new SolidBrush(isDarkMode ? Color.Silver : Color.DimGray))
+            using (var textBrush = new SolidBrush(isDarkMode ? Color.FromArgb(220, 220, 220) : Color.DimGray))
             {
                 // 1. 時間グリッドとラベル
                 for (int hour = startHour; hour <= endHour; hour++)
@@ -3517,7 +4076,15 @@ namespace TaskManager.Forms
 
                             var itemRect = new RectangleF(leftMargin + 2, itemY, centerX - leftMargin - 4, itemHeight);
                             g.FillRectangle(eventBrush, itemRect);
-                            if (itemHeight > 15) g.DrawString(evt.Title, itemFont, itemTextBrush, itemRect, sf);
+                            Color borderColor = ControlPaint.Dark(evtBaseColor, 0.1f);
+                            using (var borderPen = new Pen(borderColor)) g.DrawRectangle(borderPen, itemRect.X, itemRect.Y, itemRect.Width, itemRect.Height);
+                            
+                            if (itemHeight > 15) {
+                                Color evtTextColor = GetContrastTextColor(evtBaseColor);
+                                using (var evtTextBrush = new SolidBrush(evtTextColor)) {
+                                    g.DrawString(evt.Title, itemFont, evtTextBrush, itemRect, sf);
+                                }
+                            }
                         }
                     }
                 }
@@ -3577,6 +4144,17 @@ namespace TaskManager.Forms
                 {
                     Color snapColor = isColorVisionSupport ? Color.FromArgb(213, 94, 0) : Color.Red;
                     using (var snapPen = new Pen(snapColor, 1) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash }) g.DrawLine(snapPen, centerX, snapLineY, panel.Width, snapLineY);
+                }
+
+                // 6. 確定された選択範囲の描画
+                if (!panel.Capture && selectedTimeRangeStart.HasValue && selectedTimeRangeEnd.HasValue && !selectedTimeRangeRect.IsEmpty)
+                {
+                    using (var selectionBrush = new SolidBrush(Color.FromArgb(80, Color.DodgerBlue)))
+                    using (var selectionBorderPen = new Pen(Color.DodgerBlue, 1) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
+                    {
+                        g.FillRectangle(selectionBrush, selectedTimeRangeRect);
+                        g.DrawRectangle(selectionBorderPen, selectedTimeRangeRect.X, selectedTimeRangeRect.Y, selectedTimeRangeRect.Width, selectedTimeRangeRect.Height);
+                    }
                 }
             }
         }
@@ -3791,6 +4369,11 @@ namespace TaskManager.Forms
                 bool bypassSnap = Control.ModifierKeys.HasFlag(Keys.Alt);
                 dragItemOriginalStartTime = bypassSnap ? GetTimeFromY(e.Y, false) : GetSnappedTime(GetTimeFromY(e.Y, false), targetDate, null, 5);
                 timelinePanel.Capture = true;
+
+                selectedTimeRangeStart = null;
+                selectedTimeRangeEnd = null;
+                selectedTimeRangeRect = RectangleF.Empty;
+                selectedTimeRangeType = null;
             }
             
             ghostRect = RectangleF.Empty;
@@ -3896,6 +4479,15 @@ namespace TaskManager.Forms
             timelinePanel.Invalidate();
         }
 
+        private void TimelinePanel_MouseLeave(object sender, EventArgs e)
+        {
+            if (timelineHoveredItem != null)
+            {
+                timelineHoveredItem = null;
+                if (mainToolTip != null) mainToolTip.SetToolTip(timelinePanel, "");
+            }
+        }
+
         private void TimelinePanel_MouseUp(object sender, MouseEventArgs e)
         {
             if (!timelinePanel.Capture) return;
@@ -3924,6 +4516,18 @@ namespace TaskManager.Forms
                     }
                     evt.StartTime = newStart.ToString("o");
                     evt.EndTime = newEnd.ToString("o");
+                    
+                    // 変数キャプチャのバグを防ぐため、ローカル変数にコピー
+                    string origStartUndo = dragItemOriginalStartTime.ToString("o");
+                    string origEndUndo = dragItemOriginalEndTime.ToString("o");
+
+                    undoStack.Push(new GenericUndoCommand(() => {
+                        evt.StartTime = origStartUndo;
+                        evt.EndTime = origEndUndo;
+                        dataService.SaveToJson(dataService.EventsFile, AllEvents);
+                        UpdateAllViews();
+                    }));
+
                     dataService.SaveToJson(dataService.EventsFile, AllEvents);
                 } else if (dragItemType == "TimeLog") {
                     var log = (TimeLog)draggedItem;
@@ -3932,6 +4536,13 @@ namespace TaskManager.Forms
                     log.StartTime = newStart.ToString("o");
                     log.EndTime = newEnd.ToString("o");
                     if (ResolveTimeLogOverlap(log)) {
+                        undoStack.Push(new GenericUndoCommand(() => {
+                            log.StartTime = origStart;
+                            log.EndTime = origEnd;
+                            dataService.SaveToJson(dataService.TimeLogsFile, AllTimeLogs);
+                            RecalculateTaskTrackedTime(log.TaskID);
+                            UpdateAllViews();
+                        }));
                         dataService.SaveToJson(dataService.TimeLogsFile, AllTimeLogs);
                         RecalculateTaskTrackedTime(log.TaskID);
                     } else {
@@ -3949,38 +4560,20 @@ namespace TaskManager.Forms
 
                 DateTime startT = dragItemOriginalStartTime;
                 if (startT > endT) { var temp = startT; startT = endT; endT = temp; }
-                if (startT == endT) endT = startT.AddMinutes(30);
-
-                if (dragMode == "createEvent") {
-                    if (TestEventOverlap(startT, endT)) {
-                        if (MessageBox.Show("指定された時間帯は他の予定と重複しています。保存しますか？", "重複の警告", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.No) {
-                            dragMode = "none"; dragItemType = null; draggedItem = null; ghostRect = RectangleF.Empty; snapLineY = -1; UpdateAllViews();
-                            return;
-                        }
-                    }
-                    var newEvt = new EventItem {
-                        ID = Guid.NewGuid().ToString(),
-                        Title = "新しい予定",
-                        StartTime = startT.ToString("o"),
-                        EndTime = endT.ToString("o"),
-                        IsAllDay = false
-                    };
-                    string dateKey = targetDate.ToString("yyyy-MM-dd");
-                    if (!AllEvents.ContainsKey(dateKey)) AllEvents[dateKey] = new List<EventItem>();
-                    AllEvents[dateKey].Add(newEvt);
-                    dataService.SaveToJson(dataService.EventsFile, AllEvents);
-                } else {
-                    var newLog = new TimeLog {
-                        ID = Guid.NewGuid().ToString(),
-                        TaskID = "",
-                        Memo = "新しい実績",
-                        StartTime = startT.ToString("o"),
-                        EndTime = endT.ToString("o")
-                    };
-                    if (ResolveTimeLogOverlap(newLog)) {
-                        AllTimeLogs.Add(newLog);
-                        dataService.SaveToJson(dataService.TimeLogsFile, AllTimeLogs);
-                    }
+                
+                if (startT == endT) 
+                {
+                    selectedTimeRangeStart = null;
+                    selectedTimeRangeEnd = null;
+                    selectedTimeRangeRect = RectangleF.Empty;
+                    selectedTimeRangeType = null;
+                }
+                else
+                {
+                    selectedTimeRangeStart = startT;
+                    selectedTimeRangeEnd = endT;
+                    selectedTimeRangeRect = ghostRect;
+                    selectedTimeRangeType = dragMode == "createEvent" ? "Event" : "TimeLog";
                 }
             }
             
@@ -4083,16 +4676,134 @@ namespace TaskManager.Forms
         {
             if (e.Button != MouseButtons.Right) return;
             
+            DateTime clickedTime = GetTimeFromY(e.Y);
+            DateTime selectedDate = timelinePanel.Tag is DateTime ? ((DateTime)timelinePanel.Tag).Date : DateTime.Today;
+            int centerX = timelinePanel.Width / 2;
+
+            if (selectedTimeRangeStart.HasValue && selectedTimeRangeEnd.HasValue && 
+                clickedTime >= selectedTimeRangeStart.Value && clickedTime <= selectedTimeRangeEnd.Value &&
+                ((selectedTimeRangeType == "TimeLog" && e.X > centerX) || (selectedTimeRangeType == "Event" && e.X <= centerX)))
+            {
+                ContextMenuStrip ctx = new ContextMenuStrip();
+                if (isDarkMode) ctx.Renderer = new DarkModeRenderer();
+
+                if (selectedTimeRangeType == "TimeLog")
+                {
+                    var addLogMenu = new ToolStripMenuItem("選択範囲に時間記録を追加");
+                    addLogMenu.Click += (s, ev) => {
+                        var form = new FormTimeLogEntry(selectedTimeRangeStart.Value, selectedTimeRangeEnd.Value, Projects, AllTasks);
+                        ThemeManager.ApplyTheme(form, isDarkMode);
+                        if (form.ShowDialog(this) == DialogResult.OK) {
+                            if (ResolveTimeLogOverlap(form.ResultLog)) {
+                                AllTimeLogs.Add(form.ResultLog);
+                                dataService.SaveToJson(dataService.TimeLogsFile, AllTimeLogs);
+                                RecalculateTaskTrackedTime(form.ResultLog.TaskID);
+                                selectedTimeRangeStart = null;
+                                selectedTimeRangeEnd = null;
+                                selectedTimeRangeRect = RectangleF.Empty;
+                                UpdateAllViews();
+                            }
+                        }
+                    };
+                    ctx.Items.Add(addLogMenu);
+
+                    var deleteLogMenu = new ToolStripMenuItem("選択範囲内の記録を削除");
+                    deleteLogMenu.Click += (s, ev) => {
+                        if (MessageBox.Show("選択した時間帯に含まれるすべての記録を削除しますか？", "一括削除の確認", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) {
+                            var logsToRemove = AllTimeLogs.Where(l => {
+                                if (string.IsNullOrEmpty(l.StartTime) || string.IsNullOrEmpty(l.EndTime)) return false;
+                                DateTime st = DateTime.Parse(l.StartTime);
+                                DateTime et = DateTime.Parse(l.EndTime);
+                                return (st < selectedTimeRangeEnd.Value && et > selectedTimeRangeStart.Value);
+                            }).ToList();
+
+                            foreach(var l in logsToRemove) {
+                                AllTimeLogs.Remove(l);
+                                RecalculateTaskTrackedTime(l.TaskID);
+                            }
+                            dataService.SaveToJson(dataService.TimeLogsFile, AllTimeLogs);
+                            selectedTimeRangeStart = null;
+                            selectedTimeRangeEnd = null;
+                            selectedTimeRangeRect = RectangleF.Empty;
+                            UpdateAllViews();
+                        }
+                    };
+                    ctx.Items.Add(deleteLogMenu);
+                }
+                else // Event
+                {
+                    var addEventMenu = new ToolStripMenuItem("選択範囲に予定を追加");
+                    addEventMenu.Click += (s, ev) => {
+                        var newEvt = new EventItem {
+                            ID = Guid.NewGuid().ToString(),
+                            Title = "新しい予定",
+                            StartTime = selectedTimeRangeStart.Value.ToString("o"),
+                            EndTime = selectedTimeRangeEnd.Value.ToString("o"),
+                            IsAllDay = false
+                        };
+                        var form = new FormEventInput(newEvt, selectedTimeRangeStart.Value);
+                        ThemeManager.ApplyTheme(form, isDarkMode);
+                        if (form.ShowDialog(this) == DialogResult.OK) {
+                            string dateKey = selectedDate.ToString("yyyy-MM-dd");
+                            if (!AllEvents.ContainsKey(dateKey)) AllEvents[dateKey] = new List<EventItem>();
+                            AllEvents[dateKey].Add(form.ResultEvent);
+                            dataService.SaveToJson(dataService.EventsFile, AllEvents);
+                            
+                            selectedTimeRangeStart = null;
+                            selectedTimeRangeEnd = null;
+                            selectedTimeRangeRect = RectangleF.Empty;
+                            UpdateAllViews();
+                        }
+                    };
+                    ctx.Items.Add(addEventMenu);
+                    
+                    var deleteEventMenu = new ToolStripMenuItem("選択範囲内の予定を削除");
+                    deleteEventMenu.Click += (s, ev) => {
+                        if (MessageBox.Show("選択した時間帯に含まれるすべての予定を削除しますか？", "一括削除の確認", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) {
+                            string dateKey = selectedDate.ToString("yyyy-MM-dd");
+                            if (AllEvents.ContainsKey(dateKey)) {
+                                var evtsToRemove = AllEvents[dateKey].Where(evItm => {
+                                    if (evItm.IsAllDay || string.IsNullOrEmpty(evItm.StartTime) || string.IsNullOrEmpty(evItm.EndTime)) return false;
+                                    DateTime st = DateTime.Parse(evItm.StartTime);
+                                    DateTime et = DateTime.Parse(evItm.EndTime);
+                                    return (st < selectedTimeRangeEnd.Value && et > selectedTimeRangeStart.Value);
+                                }).ToList();
+
+                                foreach(var evItm in evtsToRemove) {
+                                    AllEvents[dateKey].Remove(evItm);
+                                }
+                                dataService.SaveToJson(dataService.EventsFile, AllEvents);
+                            }
+                            selectedTimeRangeStart = null;
+                            selectedTimeRangeEnd = null;
+                            selectedTimeRangeRect = RectangleF.Empty;
+                            UpdateAllViews();
+                        }
+                    };
+                    ctx.Items.Add(deleteEventMenu);
+                }
+
+                var cancelSelectionMenu = new ToolStripMenuItem("選択を解除");
+                cancelSelectionMenu.Click += (s, ev) => {
+                    selectedTimeRangeStart = null;
+                    selectedTimeRangeEnd = null;
+                    selectedTimeRangeRect = RectangleF.Empty;
+                    UpdateTimelineView(selectedDate);
+                };
+                ctx.Items.Add(cancelSelectionMenu);
+                
+                ctx.Show(timelinePanel, e.Location);
+                return;
+            }
+
             string hitType; object hitItem; string rMode;
             HitTestTimeline(e.Location, out hitType, out hitItem, out rMode);
             if (hitItem != null && hitType == "Event")
             {
                 ContextMenuStrip ctx = new ContextMenuStrip();
                 if (isDarkMode) ctx.Renderer = new DarkModeRenderer();
-
                 
                 var evt = (EventItem)hitItem;
-                DateTime selectedDate = timelinePanel.Tag is DateTime ? ((DateTime)timelinePanel.Tag).Date : DateTime.Today;
 
                 var editMenu = new ToolStripMenuItem("イベントを編集");
                 editMenu.Click += (s, ev) => { var form = new FormEventInput(evt); if (form.ShowDialog(this) == DialogResult.OK) { dataService.SaveToJson(dataService.EventsFile, AllEvents); UpdateAllViews(); } };
@@ -4125,7 +4836,6 @@ namespace TaskManager.Forms
                 if (isDarkMode) ctx.Renderer = new DarkModeRenderer();
 
                 var log = (TimeLog)hitItem;
-                DateTime selectedDate = timelinePanel.Tag is DateTime ? ((DateTime)timelinePanel.Tag).Date : DateTime.Today;
 
                 var adjustMenu = new ToolStripMenuItem("時間の詳細調整...");
                 adjustMenu.Click += (s, ev) => {
@@ -4235,16 +4945,12 @@ namespace TaskManager.Forms
             }
             else
             {
-                int centerX = timelinePanel.Width / 2;
                 if (e.X > centerX)
                 {
                     ContextMenuStrip ctx = new ContextMenuStrip();
                     if (isDarkMode) ctx.Renderer = new DarkModeRenderer();
 
-                
-                    DateTime clickedTime = GetTimeFromY(e.Y);
                     DateTime startTime = clickedTime.AddMinutes(-(clickedTime.Minute % 15));
-                    DateTime selectedDate = timelinePanel.Tag is DateTime ? ((DateTime)timelinePanel.Tag).Date : DateTime.Today;
                     
                     var addLogMenu = new ToolStripMenuItem("時間記録を追加");
                     addLogMenu.Click += (s, ev) => {
@@ -4324,6 +5030,9 @@ namespace TaskManager.Forms
                     if (type == "Event" && item is EventItem)
                     {
                         var evt = (EventItem)item;
+                        string oldStartTime = evt.StartTime;
+                        string oldEndTime = evt.EndTime;
+                        bool oldIsAllDay = evt.IsAllDay;
                         DateTime oldStart;
                         if (DateTime.TryParse(evt.StartTime, out oldStart))
                         {
@@ -4353,25 +5062,57 @@ namespace TaskManager.Forms
                             evt.EndTime = newEnd.ToString("o");
                             evt.IsAllDay = false;
 
+                            undoStack.Push(new GenericUndoCommand(() => {
+                                string currentSt = evt.StartTime;
+                                evt.StartTime = oldStartTime;
+                                evt.EndTime = oldEndTime;
+                                evt.IsAllDay = oldIsAllDay;
+                                DateTime oSt, cSt;
+                                if (DateTime.TryParse(oldStartTime, out oSt) && DateTime.TryParse(currentSt, out cSt)) {
+                                    string restNewDateStr = cSt.ToString("yyyy-MM-dd");
+                                    string restOldDateStr = oSt.ToString("yyyy-MM-dd");
+                                    if (restNewDateStr != restOldDateStr) {
+                                        if (AllEvents.ContainsKey(restNewDateStr)) AllEvents[restNewDateStr].Remove(evt);
+                                        if (!AllEvents.ContainsKey(restOldDateStr)) AllEvents[restOldDateStr] = new List<EventItem>();
+                                        AllEvents[restOldDateStr].Add(evt);
+                                    }
+                                }
+                                dataService.SaveToJson(dataService.EventsFile, AllEvents);
+                                UpdateAllViews();
+                            }));
+
                             dataService.SaveToJson(dataService.EventsFile, AllEvents);
                         }
                     }
                     else if (type == "Task" && item is TaskItem)
                     {
                         var task = (TaskItem)item;
+                        string oldDueDate = task.期日;
                         DateTime originalTime = dropTime;
                         DateTime d;
                         if (!string.IsNullOrEmpty(task.期日) && DateTime.TryParse(task.期日, out d)) originalTime = dropTime.Date.Add(d.TimeOfDay);
                         task.期日 = originalTime.ToString("yyyy-MM-dd HH:mm");
+                        
+                        undoStack.Push(new GenericUndoCommand(() => {
+                            task.期日 = oldDueDate;
+                            dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
+                            UpdateAllViews();
+                        }));
                         dataService.SaveTasksToCsv(dataService.TasksFile, AllTasks);
                     }
                     else if (type == "Project" && item is ProjectItem)
                     {
                         var proj = (ProjectItem)item;
+                        string oldDueDate = proj.ProjectDueDate;
                         DateTime originalTime = dropTime;
                         DateTime d;
                         if (!string.IsNullOrEmpty(proj.ProjectDueDate) && DateTime.TryParse(proj.ProjectDueDate, out d)) originalTime = dropTime.Date.Add(d.TimeOfDay);
                         proj.ProjectDueDate = originalTime.ToString("yyyy-MM-dd HH:mm");
+                        undoStack.Push(new GenericUndoCommand(() => {
+                            proj.ProjectDueDate = oldDueDate;
+                            dataService.SaveToJson(dataService.ProjectsFile, Projects);
+                            UpdateAllViews();
+                        }));
                         dataService.SaveToJson(dataService.ProjectsFile, Projects);
                     }
                     UpdateAllViews();
@@ -4482,12 +5223,14 @@ namespace TaskManager.Forms
                 foreach (DataGridViewRow row in taskDataGridView.Rows)
                 {
                     var t = row.Tag as TaskItem;
+                    var p = row.Tag as ProjectItem;
                     if (t != null && t.ID == task.ID)
                     {
-                        double totalSec = t.TrackedTimeSeconds;
-                        if (currentTaskStartTime.HasValue) totalSec += (DateTime.Now - currentTaskStartTime.Value).TotalSeconds;
-                        row.Cells["TrackedTime"].Value = FormatTrackedTime(totalSec);
-                        break;
+                        taskDataGridView.InvalidateCell(taskDataGridView.Columns["TrackedTime"].Index, row.Index);
+                    }
+                    else if (p != null && task.ProjectID == p.ProjectID)
+                    {
+                        taskDataGridView.InvalidateCell(taskDataGridView.Columns["TrackedTime"].Index, row.Index);
                     }
                 }
             }
@@ -4579,6 +5322,7 @@ namespace TaskManager.Forms
             }
             else
             {
+                Application.RemoveMessageFilter(this);
                 // 終了時に現在のウィンドウサイズとスプリッター位置を保存する
                 if (Settings != null && Settings.RememberWindowSize && this.WindowState == FormWindowState.Normal)
                 {
@@ -4630,19 +5374,9 @@ namespace TaskManager.Forms
 
         private bool ShowLoginDialog()
         {
-            using (var form = new Form { Text = "ログイン", Size = new Size(300, 160), StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, TopMost = true })
+            using (var form = new FormLogin(Settings.Passcode, isDarkMode))
             {
-                form.Controls.Add(new Label { Text = "パスコードを入力してください:", Location = new Point(10, 15), AutoSize = true });
-                var txt = new TextBox { Location = new Point(10, 40), Size = new Size(260, 25), PasswordChar = '*' };
-                form.Controls.Add(txt);
-                var btnOk = new Button { Text = "OK", Location = new Point(90, 80), DialogResult = DialogResult.OK };
-                var btnCancel = new Button { Text = "キャンセル", Location = new Point(180, 80), DialogResult = DialogResult.Cancel };
-                form.Controls.AddRange(new Control[] { btnOk, btnCancel });
-                form.AcceptButton = btnOk; form.CancelButton = btnCancel;
-                ThemeManager.ApplyTheme(form, isDarkMode);
-                form.Shown += (s, ev) => txt.Focus();
-                if (form.ShowDialog(this) == DialogResult.OK) return txt.Text == Settings.Passcode;
-                return false;
+                return form.ShowDialog(this) == DialogResult.OK;
             }
         }
 
@@ -4776,7 +5510,7 @@ namespace TaskManager.Forms
                 if (rule.Params.TryGetValue("DueHolidayShift", out hObj) && hObj != null) dueHShift = hObj.ToString();
             }
 
-            var holidays = GetHolidays();
+            var holidays = dataService.GetHolidays();
             int loopCount = 0;
             while (loopCount < 30)
             {
@@ -4988,7 +5722,7 @@ namespace TaskManager.Forms
             }
 
             DateTime actualDate = nextTheo;
-            var holidays = GetHolidays();
+            var holidays = dataService.GetHolidays();
             int loopCount = 0;
             while (loopCount < 30)
             {
@@ -5030,6 +5764,56 @@ namespace TaskManager.Forms
                 if (!shifted) break;
             }
             return new RecurringDateResult { TheoreticalDate = nextTheo, ActualDate = actualDate };
+        }
+    }
+
+    public interface IUndoCommand
+    {
+        void Undo();
+    }
+
+    public class GenericUndoCommand : IUndoCommand
+    {
+        private Action _undoAction;
+        public GenericUndoCommand(Action undoAction) { _undoAction = undoAction; }
+        public void Undo() { if (_undoAction != null) _undoAction(); }
+    }
+
+    public class TaskBulkDeleteCommand : IUndoCommand
+    {
+        private List<TaskItem> _deletedTasks;
+        private Action<List<TaskItem>> _restoreAction;
+
+        public TaskBulkDeleteCommand(List<TaskItem> deletedTasks, Action<List<TaskItem>> restoreAction)
+        {
+            _deletedTasks = deletedTasks;
+            _restoreAction = restoreAction;
+        }
+
+        public void Undo()
+        {
+            if (_restoreAction != null) _restoreAction(_deletedTasks);
+        }
+    }
+
+    public class TaskStatusChangeCommand : IUndoCommand
+    {
+        private TaskItem _task;
+        private string _oldStatus;
+        private string _oldCompletionDate;
+        private Action<TaskItem, string, string> _restoreAction;
+
+        public TaskStatusChangeCommand(TaskItem task, string oldStatus, string oldCompletionDate, Action<TaskItem, string, string> restoreAction)
+        {
+            _task = task;
+            _oldStatus = oldStatus;
+            _oldCompletionDate = oldCompletionDate;
+            _restoreAction = restoreAction;
+        }
+
+        public void Undo()
+        {
+            if (_restoreAction != null) _restoreAction(_task, _oldStatus, _oldCompletionDate);
         }
     }
 }

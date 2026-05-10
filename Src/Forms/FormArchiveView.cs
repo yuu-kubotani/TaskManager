@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -134,6 +134,11 @@ namespace TaskManager.Forms
             _listArchiveItems.DrawItem += (s, e) => e.DrawDefault = true;
             _listArchiveItems.DrawSubItem += (s, e) => e.DrawDefault = true;
             _listArchiveItems.DoubleClick += (s, e) => _btnRestore.PerformClick();
+
+            // スクロールや更新時のちらつきを防止するための DoubleBuffered の有効化
+            typeof(ListView).InvokeMember("DoubleBuffered", 
+                System.Reflection.BindingFlags.SetProperty | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, 
+                null, _listArchiveItems, new object[] { true });
             
             this.Controls.Add(_listArchiveItems);
             _listArchiveItems.BringToFront();
@@ -157,7 +162,8 @@ namespace TaskManager.Forms
             // プロジェクトをリストビューの項目として追加
             foreach (var p in _archivedProjects)
             {
-                if (!string.IsNullOrEmpty(searchTerm) && !p.ProjectName.Contains(searchTerm))
+                // Null参照エラーを防ぎつつ、大文字小文字を区別せずに検索する
+                if (!string.IsNullOrEmpty(searchTerm) && (p.ProjectName ?? "").IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     continue;
                 }
@@ -170,7 +176,8 @@ namespace TaskManager.Forms
             // タスクをリストビューの項目として追加
             foreach (var t in _archivedTasks)
             {
-                if (!string.IsNullOrEmpty(searchTerm) && !t.タスク.Contains(searchTerm))
+                // Null参照エラーを防ぎつつ、大文字小文字を区別せずに検索する
+                if (!string.IsNullOrEmpty(searchTerm) && (t.タスク ?? "").IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     continue;
                 }

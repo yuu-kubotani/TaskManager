@@ -2,6 +2,7 @@
 using System.Drawing;
 using System.Windows.Forms;
 using TaskManager.Models;
+using TaskManager.Utils;
 
 namespace TaskManager.Forms
 {
@@ -57,43 +58,34 @@ namespace TaskManager.Forms
             Color fg = isDark ? Color.White : SystemColors.ControlText;
 
             this.BackColor = formBg;
-            foreach (Control c in this.Controls) {
-                var txt = c as TextBox;
-                if (txt != null) { txt.BackColor = surfaceBg; txt.ForeColor = fg; txt.BorderStyle = BorderStyle.FixedSingle; }
-                else {
-                    var dtp = c as DateTimePicker;
-                    if (dtp != null) { dtp.BackColor = surfaceBg; dtp.ForeColor = fg; }
-                    else {
-                        var btn = c as Button;
-                        if (btn != null) {
-                            btn.FlatStyle = FlatStyle.Flat;
-                            btn.FlatAppearance.BorderColor = isDark ? Color.FromArgb(80, 80, 80) : Color.DarkGray;
-                            btn.BackColor = isDark ? Color.FromArgb(60, 60, 65) : SystemColors.Control;
-                            btn.ForeColor = fg;
-                        }
-                        else if (c is Label || c is CheckBox) c.ForeColor = fg;
-                    }
+            foreach (Control c in this.Controls)
+            {
+                if (c is TextBox)
+                {
+                    var txt = (TextBox)c;
+                    txt.BackColor = surfaceBg;
+                    txt.ForeColor = fg;
+                    txt.BorderStyle = BorderStyle.FixedSingle;
+                }
+                else if (c is DateTimePicker)
+                {
+                    var dtp = (DateTimePicker)c;
+                    dtp.BackColor = surfaceBg;
+                    dtp.ForeColor = fg;
+                }
+                else if (c is Button)
+                {
+                    var btn = (Button)c;
+                    btn.FlatStyle = FlatStyle.Flat;
+                    btn.FlatAppearance.BorderColor = isDark ? Color.FromArgb(80, 80, 80) : Color.DarkGray;
+                    btn.BackColor = isDark ? Color.FromArgb(60, 60, 65) : SystemColors.Control;
+                    btn.ForeColor = fg;
+                }
+                else if (c is Label || c is CheckBox)
+                {
+                    c.ForeColor = fg;
                 }
             }
-        }
-
-        private void ApplyDarkCalendar(DateTimePicker dtp)
-        {
-            dtp.DropDown += (s, ev) => {
-                if (this.BackColor.R >= 100) return; // ライトモードの場合は無視
-                IntPtr hMonthCal = SendMessage(dtp.Handle, 0x1008, IntPtr.Zero, IntPtr.Zero);
-                if (hMonthCal != IntPtr.Zero) {
-                    SetWindowTheme(hMonthCal, "", "");
-                    int bg = ColorTranslator.ToWin32(Color.FromArgb(30, 30, 30));
-                    int fg = ColorTranslator.ToWin32(Color.White);
-                    SendMessage(hMonthCal, 0x1006, (IntPtr)0, (IntPtr)bg);
-                    SendMessage(hMonthCal, 0x1006, (IntPtr)1, (IntPtr)fg);
-                    SendMessage(hMonthCal, 0x1006, (IntPtr)2, (IntPtr)ColorTranslator.ToWin32(Color.FromArgb(45, 45, 48)));
-                    SendMessage(hMonthCal, 0x1006, (IntPtr)3, (IntPtr)fg);
-                    SendMessage(hMonthCal, 0x1006, (IntPtr)4, (IntPtr)bg);
-                    SendMessage(hMonthCal, 0x1006, (IntPtr)5, (IntPtr)ColorTranslator.ToWin32(Color.Gray));
-                }
-            };
         }
 
         private void InitializeComponent(DateTime? defaultStartTime)
@@ -110,24 +102,44 @@ namespace TaskManager.Forms
             this.Controls.Add(textTitle);
 
             checkAllDay = new CheckBox { Text = "終日の予定", Location = new Point(15, 75), AutoSize = true };
-            checkAllDay.CheckedChanged += (s, e) => { timeStart.Enabled = !checkAllDay.Checked; timeEnd.Enabled = !checkAllDay.Checked; };
+            checkAllDay.CheckedChanged += (s, e) => 
+            { 
+                timeStart.Enabled = !checkAllDay.Checked; 
+                timeEnd.Enabled = !checkAllDay.Checked; 
+            };
             this.Controls.Add(checkAllDay);
 
             this.Controls.Add(new Label { Text = "開始日時：", Location = new Point(15, 105), AutoSize = true });
             dateStart = new DateTimePicker { Location = new Point(15, 125), Width = 110, Format = DateTimePickerFormat.Short };
             timeStart = new DateTimePicker { Location = new Point(130, 125), Width = 80, Format = DateTimePickerFormat.Time, ShowUpDown = true };
-            ApplyDarkCalendar(dateStart); ApplyDarkCalendar(timeStart);
-            if (defaultStartTime.HasValue) { dateStart.Value = defaultStartTime.Value; timeStart.Value = defaultStartTime.Value; }
-            this.Controls.Add(dateStart); this.Controls.Add(timeStart);
+            UIUtility.ApplyDarkCalendar(dateStart, this);
+            UIUtility.ApplyDarkCalendar(timeStart, this);
+            
+            if (defaultStartTime.HasValue)
+            {
+                dateStart.Value = defaultStartTime.Value;
+                timeStart.Value = defaultStartTime.Value;
+            }
+            this.Controls.Add(dateStart);
+            this.Controls.Add(timeStart);
 
             this.Controls.Add(new Label { Text = "終了日時：", Location = new Point(220, 105), AutoSize = true });
             dateEnd = new DateTimePicker { Location = new Point(220, 125), Width = 110, Format = DateTimePickerFormat.Short };
             timeEnd = new DateTimePicker { Location = new Point(335, 125), Width = 80, Format = DateTimePickerFormat.Time, ShowUpDown = true };
-            ApplyDarkCalendar(dateEnd); ApplyDarkCalendar(timeEnd);
-            if (defaultStartTime.HasValue) { dateEnd.Value = defaultStartTime.Value.AddMinutes(30); timeEnd.Value = defaultStartTime.Value.AddMinutes(30); }
-            dateEnd.Location = new Point(15, 155); timeEnd.Location = new Point(130, 155);
+            UIUtility.ApplyDarkCalendar(dateEnd, this);
+            UIUtility.ApplyDarkCalendar(timeEnd, this);
+            
+            if (defaultStartTime.HasValue)
+            {
+                dateEnd.Value = defaultStartTime.Value.AddMinutes(30);
+                timeEnd.Value = defaultStartTime.Value.AddMinutes(30);
+            }
+            
+            dateEnd.Location = new Point(15, 155);
+            timeEnd.Location = new Point(130, 155);
             this.Controls.Add(new Label { Text = "終了日時：", Location = new Point(15, 155), AutoSize = true, Visible = false }); // レイアウト調整用非表示
-            this.Controls.Add(dateEnd); this.Controls.Add(timeEnd);
+            this.Controls.Add(dateEnd);
+            this.Controls.Add(timeEnd);
 
             buttonSave = new Button { Text = "保存", Location = new Point(200, 195), Size = new Size(80, 30) };
             buttonSave.Click += ButtonSave_Click;
@@ -147,10 +159,19 @@ namespace TaskManager.Forms
             {
                 textTitle.Text = _existingEvent.Title;
                 checkAllDay.Checked = _existingEvent.IsAllDay;
+                
                 DateTime st;
-                if (DateTime.TryParse(_existingEvent.StartTime, out st)) { dateStart.Value = st; timeStart.Value = st; }
+                if (DateTime.TryParse(_existingEvent.StartTime, out st))
+                {
+                    dateStart.Value = st;
+                    timeStart.Value = st;
+                }
                 DateTime et;
-                if (DateTime.TryParse(_existingEvent.EndTime, out et)) { dateEnd.Value = et; timeEnd.Value = et; }
+                if (DateTime.TryParse(_existingEvent.EndTime, out et))
+                {
+                    dateEnd.Value = et;
+                    timeEnd.Value = et;
+                }
             }
         }
 
@@ -182,19 +203,7 @@ namespace TaskManager.Forms
             ResultEvent.StartTime = startDt.ToString("o");
             ResultEvent.EndTime = endDt.ToString("o");
 
-            await ShowSaveFeedbackAndClose("予定を保存しました");
-        }
-
-        private async System.Threading.Tasks.Task ShowSaveFeedbackAndClose(string message)
-        {
-            foreach (Control c in this.Controls) { var b = c as Button; if (b != null) b.Enabled = false; }
-            var lbl = new Label { Text = message, Font = new Font("Meiryo UI", 9, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(180, 0, 0, 0), AutoSize = true, Padding = new Padding(10) };
-            this.Controls.Add(lbl);
-            lbl.Location = new Point((this.ClientSize.Width - lbl.Width) / 2, (this.ClientSize.Height - lbl.Height) / 2);
-            lbl.BringToFront();
-            await System.Threading.Tasks.Task.Delay(1200);
-            this.DialogResult = DialogResult.OK;
-            this.Close();
+            await UIUtility.ShowSaveFeedbackAndClose(this, "予定を保存しました");
         }
     }
 }

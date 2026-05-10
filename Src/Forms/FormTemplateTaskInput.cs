@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -58,7 +58,7 @@ namespace TaskManager.Forms
             this.MinimizeBox = false;
 
             var lblTask = new Label { Text = "タスク内容：", Location = new Point(15, 15), AutoSize = true };
-            _txtTask = new TextBox { Multiline = true, Location = new Point(15, 35), Size = new Size(300, 60) };
+            _txtTask = new TextBox { Multiline = true, Location = new Point(15, 35), Size = new Size(300, 60), AcceptsReturn = true };
 
             var lblCategory = new Label { Text = "カテゴリ：", Location = new Point(15, 110), AutoSize = true };
             _cmbCategory = new ComboBox { Location = new Point(15, 130), Size = new Size(140, 25), DropDownStyle = ComboBoxStyle.DropDownList };
