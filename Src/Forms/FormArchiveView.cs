@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     /// <summary>
     /// アーカイブされたプロジェクトとタスクを閲覧、検索、復元、または完全に削除するための画面を提供します。
@@ -69,6 +69,7 @@ namespace TaskManager.Forms
             this.Size = new Size(800, 600);
             this.StartPosition = FormStartPosition.CenterParent;
             this.MinimumSize = new Size(600, 400);
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             // --- Top Panel (Search) ---
             var topPanel = new Panel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(10, 8, 10, 0) };

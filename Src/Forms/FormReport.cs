@@ -1,4 +1,4 @@
-﻿// 最新版: コンパイルエラー修復済み
+﻿﻿﻿﻿﻿// 最新版: コンパイルエラー修復済み
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -7,11 +7,11 @@ using System.Windows.Forms;
 using System.IO;
 using System.Text;
 using System.Windows.Forms.DataVisualization.Charting;
-using TaskManager.Models;
-using TaskManager.Services;
-using TaskManager.Utils;
+using UniConsul.Models;
+using UniConsul.Services;
+using UniConsul.Utils;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormReport : Form
     {
@@ -37,12 +37,17 @@ namespace TaskManager.Forms
         private Chart _chartTotalCategoryBar, _chartTotalCategoryPie;
         private Chart _chartTotalStatusBar, _chartTotalStatusPie;
         private Chart _chartSpeedProject, _chartSpeedCategory;
+        private Chart _chartWorkHoursProject, _chartWorkHoursCategory;
+        private Chart _chartAppSwitch, _chartCpuLoad;
 
         private Button _btnExport;
         private DateTimePicker _dtpStartDaily, _dtpEndDaily;
         private DateTimePicker _dtpStartTotal, _dtpEndTotal;
         private DateTimePicker _dtpStartSpeed, _dtpEndSpeed;
+        private DateTimePicker _dtpStartWorkHours, _dtpEndWorkHours;
+        private DateTimePicker _dtpStartMetrics, _dtpEndMetrics;
         private CheckBox _chkAllTimeSpeed, _chkUseExcludeSpeed;
+        private CheckBox _chkAllTimeWorkHours;
         private Label _lblTotalTimeTotal;
         private TextBox _txtInsights;
         private SplitContainer _mainSplitContainer;
@@ -80,6 +85,8 @@ namespace TaskManager.Forms
             GenerateDailyReport();
             GenerateTotalReport();
             GenerateSpeedReport();
+            GenerateWorkHoursReport();
+            GenerateMetricsReport();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -98,6 +105,7 @@ namespace TaskManager.Forms
             this.Text = "レポート分析";
             this.Size = new Size(1200, 850);
             this.StartPosition = FormStartPosition.CenterParent;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var pnlTop = new Panel { Dock = DockStyle.Top, Height = 45 };
             this.Controls.Add(pnlTop);
@@ -193,8 +201,17 @@ namespace TaskManager.Forms
             _chkAllTimeSpeed = new CheckBox { Text = "全期間", AutoSize = true, Margin = new Padding(10, 4, 0, 0) };
             _chkUseExcludeSpeed = new CheckBox { Text = "除外ステータスを考慮する(実質日数)", AutoSize = true, Margin = new Padding(10, 4, 0, 0) };
             var btnGenSpeed = new Button { Text = "更新", Width = 60 }; btnGenSpeed.Click += (s, e) => GenerateSpeedReport();
+            
+            var btnHelpSpeed = new Button { Text = "？", Size = new Size(24, 24), Font = new Font("Meiryo UI", 9, FontStyle.Bold), Cursor = Cursors.Hand, Margin = new Padding(10, 1, 0, 0) };
+            btnHelpSpeed.Click += (s, e) => {
+                string helpText = "【完了スピード (実質日数) とは】\n\n" +
+                                  "タスクが初めて着手状態になってから「完了済み」になるまでの平均日数です。\n\n" +
+                                  "・「除外ステータスを考慮する」にチェックを入れると、設定で指定したステータス（「保留」や「確認待ち」など）になっていた期間を差し引き、実質的な日数のみで計算します。";
+                MessageBox.Show(this, helpText, "完了スピードについて", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+
             _chkAllTimeSpeed.CheckedChanged += (s, e) => { _dtpStartSpeed.Enabled = !_chkAllTimeSpeed.Checked; _dtpEndSpeed.Enabled = !_chkAllTimeSpeed.Checked; };
-            pnlSpeedTop.Controls.AddRange(new Control[] { new Label { Text = "開始:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpStartSpeed, new Label { Text = "終了:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpEndSpeed, _chkAllTimeSpeed, _chkUseExcludeSpeed, btnGenSpeed });
+            pnlSpeedTop.Controls.AddRange(new Control[] { new Label { Text = "開始:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpStartSpeed, new Label { Text = "終了:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpEndSpeed, _chkAllTimeSpeed, _chkUseExcludeSpeed, btnGenSpeed, btnHelpSpeed });
             tabSpeed.Controls.Add(pnlSpeedTop);
             UIUtility.ApplyDarkCalendar(_dtpStartSpeed, this); UIUtility.ApplyDarkCalendar(_dtpEndSpeed, this);
 
@@ -212,7 +229,75 @@ namespace TaskManager.Forms
             tabSpeed.Controls.Add(speedLayout);
             speedLayout.BringToFront();
 
-            _tabControl.TabPages.AddRange(new TabPage[] { tabDaily, tabTotal, tabSpeed });
+            // --- タブ4: 平均実働時間 ---
+            var tabWorkHours = new TabPage("⏳ 平均実働時間");
+            if (_isDarkMode) { tabWorkHours.BackColor = Color.FromArgb(30, 30, 30); tabWorkHours.ForeColor = Color.White; }
+            
+            var pnlWorkHoursTop = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(5) };
+            _dtpStartWorkHours = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 110, Value = defaultStart };
+            _dtpEndWorkHours = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 110, Value = DateTime.Today };
+            _chkAllTimeWorkHours = new CheckBox { Text = "全期間", AutoSize = true, Margin = new Padding(10, 4, 0, 0) };
+            var btnGenWorkHours = new Button { Text = "更新", Width = 60 }; btnGenWorkHours.Click += (s, e) => GenerateWorkHoursReport();
+            
+            var btnHelpWorkHours = new Button { Text = "？", Size = new Size(24, 24), Font = new Font("Meiryo UI", 9, FontStyle.Bold), Cursor = Cursors.Hand, Margin = new Padding(10, 1, 0, 0) };
+            btnHelpWorkHours.Click += (s, e) => {
+                string helpText = "【平均実働時間 とは】\n\n" +
+                                  "手動の時間記録や自動記録によって、実際にタスクの実行に費やした時間の平均値（時間）です。\n\n" +
+                                  "・タスクごとの重さや、カテゴリごとの作業の掛かり具合を分析するのに役立ちます。";
+                MessageBox.Show(this, helpText, "平均実働時間について", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+
+            _chkAllTimeWorkHours.CheckedChanged += (s, e) => { _dtpStartWorkHours.Enabled = !_chkAllTimeWorkHours.Checked; _dtpEndWorkHours.Enabled = !_chkAllTimeWorkHours.Checked; };
+            pnlWorkHoursTop.Controls.AddRange(new Control[] { new Label { Text = "開始:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpStartWorkHours, new Label { Text = "終了:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpEndWorkHours, _chkAllTimeWorkHours, btnGenWorkHours, btnHelpWorkHours });
+            tabWorkHours.Controls.Add(pnlWorkHoursTop);
+            UIUtility.ApplyDarkCalendar(_dtpStartWorkHours, this); UIUtility.ApplyDarkCalendar(_dtpEndWorkHours, this);
+
+            var workHoursLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+            workHoursLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            workHoursLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+
+            _chartWorkHoursProject = CreateBaseChart("プロジェクト別 平均実働時間 (h)");
+            _chartWorkHoursCategory = CreateBaseChart("カテゴリ別 平均実働時間 (h)");
+            _chartWorkHoursProject.Legends[0].Enabled = false; _chartWorkHoursCategory.Legends[0].Enabled = false;
+            _chartWorkHoursProject.ChartAreas[0].AxisX.LabelStyle.Angle = 0; _chartWorkHoursCategory.ChartAreas[0].AxisX.LabelStyle.Angle = 0;
+
+            workHoursLayout.Controls.Add(_chartWorkHoursProject, 0, 0);
+            workHoursLayout.Controls.Add(_chartWorkHoursCategory, 1, 0);
+            tabWorkHours.Controls.Add(workHoursLayout);
+            workHoursLayout.BringToFront();
+
+            // --- タブ5: PC負荷・集中度 ---
+            var tabMetrics = new TabPage("💻 PC負荷・集中度");
+            if (_isDarkMode) { tabMetrics.BackColor = Color.FromArgb(30, 30, 30); tabMetrics.ForeColor = Color.White; }
+            
+            var pnlMetricsTop = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(5) };
+            _dtpStartMetrics = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 110, Value = defaultStart };
+            _dtpEndMetrics = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 110, Value = DateTime.Today };
+            var btnGenMetrics = new Button { Text = "更新", Width = 60 }; btnGenMetrics.Click += (s, e) => GenerateMetricsReport();
+            
+            var btnHelpMetrics = new Button { Text = "？", Size = new Size(24, 24), Font = new Font("Meiryo UI", 9, FontStyle.Bold), Cursor = Cursors.Hand, Margin = new Padding(10, 1, 0, 0) };
+            btnHelpMetrics.Click += (s, e) => {
+                string helpText = "【PC負荷・集中度 について】\n\n" +
+                                  "バックグラウンドで計測したアプリの切り替え回数やPCのCPU・メモリ負荷を集計します。\n\n" +
+                                  "・切り替え回数が多いほどマルチタスク気味で集中が削がれている可能性があります。\n" +
+                                  "・曜日や時間帯によるPCの処理負荷の傾向を把握できます。";
+                MessageBox.Show(this, helpText, "PC負荷・集中度について", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+            pnlMetricsTop.Controls.AddRange(new Control[] { new Label { Text = "開始:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpStartMetrics, new Label { Text = "終了:", AutoSize = true, Margin = new Padding(3, 5, 0, 0) }, _dtpEndMetrics, btnGenMetrics, btnHelpMetrics });
+            tabMetrics.Controls.Add(pnlMetricsTop);
+            UIUtility.ApplyDarkCalendar(_dtpStartMetrics, this); UIUtility.ApplyDarkCalendar(_dtpEndMetrics, this);
+
+            var metricsLayout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+            metricsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            metricsLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+            _chartAppSwitch = CreateBaseChart("時間帯別 平均アプリ切り替え回数 (回/5分)");
+            _chartCpuLoad = CreateBaseChart("曜日別 平均CPU使用率 (%)");
+            _chartAppSwitch.Legends[0].Enabled = false; _chartCpuLoad.Legends[0].Enabled = false;
+            _chartAppSwitch.ChartAreas[0].AxisX.LabelStyle.Angle = 0; _chartCpuLoad.ChartAreas[0].AxisX.LabelStyle.Angle = 0;
+            metricsLayout.Controls.Add(_chartAppSwitch, 0, 0); metricsLayout.Controls.Add(_chartCpuLoad, 1, 0);
+            tabMetrics.Controls.Add(metricsLayout); metricsLayout.BringToFront();
+
+            _tabControl.TabPages.AddRange(new TabPage[] { tabDaily, tabTotal, tabSpeed, tabWorkHours, tabMetrics });
 
             var grpInsights = new GroupBox { Text = "💡 分析とアドバイス", Dock = DockStyle.Fill, Padding = new Padding(10) };
             _mainSplitContainer.Panel2.Controls.Add(grpInsights);
@@ -290,6 +375,46 @@ namespace TaskManager.Forms
             return data;
         }
 
+        private double GetPendingDays(string taskId, List<StatusLog> statusLogs)
+        {
+            var taskLogs = statusLogs.Where(l => l.TaskID == taskId).OrderBy(l => l.Timestamp).ToList();
+            double pendingDays = 0;
+            DateTime? pendingStart = null;
+
+            foreach (var log in taskLogs)
+            {
+                DateTime logTime;
+                if (!DateTime.TryParse(log.Timestamp, out logTime)) continue;
+
+                if (log.NewStatus == "承認待ち" || log.NewStatus == "確認待ち" || log.NewStatus == "保留" || log.NewStatus == "保留中")
+                {
+                    if (pendingStart == null) pendingStart = logTime;
+                }
+                else
+                {
+                    if (pendingStart.HasValue)
+                    {
+                        pendingDays += (logTime - pendingStart.Value).TotalDays;
+                        pendingStart = null;
+                    }
+                }
+            }
+
+            if (pendingStart.HasValue)
+            {
+                pendingDays += (DateTime.Now - pendingStart.Value).TotalDays;
+            }
+
+            return pendingDays;
+        }
+
+        private bool IsYearMonthInRange(string yearMonth, DateTime start, DateTime end)
+        {
+            if (string.IsNullOrEmpty(yearMonth) || yearMonth.Length != 7) return false;
+            if (yearMonth.CompareTo(start.ToString("yyyy-MM")) >= 0 && yearMonth.CompareTo(end.ToString("yyyy-MM")) <= 0) return true;
+            return false;
+        }
+
         private void GenerateDailyReport()
         {
             var start = _dtpStartDaily.Value.Date;
@@ -307,6 +432,7 @@ namespace TaskManager.Forms
                     var series = chart.Series.Add(key);
                     series.ChartType = currentChartType;
                     if (currentChartType == SeriesChartType.Line) series.BorderWidth = 2;
+                    series.ToolTip = "#SERIESNAME - #VALX: #VALY{F1} h";
                     foreach (var day in dateRange) {
                         double hours = dataForCharts.Where(d => keySelector(d) == key && d.Date == day).Sum(d => d.Hours);
                         series.Points.AddXY(DateTime.Parse(day).ToString("MM/dd"), hours);
@@ -325,19 +451,45 @@ namespace TaskManager.Forms
             var dataForCharts = GetFilteredLogs(start, end);
             
             double totalHours = dataForCharts.Sum(d => d.Hours);
-            int tMin = (int)(totalHours * 60);
-            _lblTotalTimeTotal.Text = string.Format("総時間: {0}時間{1}分", tMin / 60, tMin % 60);
 
             var projectSummary = dataForCharts.GroupBy(d => d.ProjectName).Select(g => new ChartData { label = g.Key, value = g.Sum(x => (double)x.Hours) }).OrderByDescending(x => x.value).ToList();
             var categorySummary = dataForCharts.GroupBy(d => d.Category).Select(g => new ChartData { label = g.Key, value = g.Sum(x => (double)x.Hours) }).OrderByDescending(x => x.value).ToList();
             var statusSummary = dataForCharts.GroupBy(d => d.Status).Select(g => new ChartData { label = g.Key, value = g.Sum(x => (double)x.Hours) }).OrderByDescending(x => x.value).ToList();
+
+            string summaryFile = Path.Combine(_dataService.AppRoot, "report_summary_history.json");
+            var summaries = _dataService.LoadFromJson<List<ReportSummaryRecord>>(summaryFile, new List<ReportSummaryRecord>());
+            foreach (var s in summaries)
+            {
+                if (IsYearMonthInRange(s.YearMonth, start, end))
+                {
+                    totalHours += s.TotalHours;
+
+                    string pName = string.IsNullOrEmpty(s.ProjectName) ? "(未分類)" : s.ProjectName;
+                    var pObj = projectSummary.FirstOrDefault(p => p.label == pName);
+                    if (pObj != null) pObj.value += s.TotalHours;
+                    else projectSummary.Add(new ChartData { label = pName, value = s.TotalHours });
+
+                    string cName = string.IsNullOrEmpty(s.Category) ? "(未分類)" : s.Category;
+                    var cObj = categorySummary.FirstOrDefault(c => c.label == cName);
+                    if (cObj != null) cObj.value += s.TotalHours;
+                    else categorySummary.Add(new ChartData { label = cName, value = s.TotalHours });
+                }
+            }
+
+            projectSummary = projectSummary.OrderByDescending(x => x.value).ToList();
+            categorySummary = categorySummary.OrderByDescending(x => x.value).ToList();
+
+            int tMin = (int)(totalHours * 60);
+            _lblTotalTimeTotal.Text = string.Format("総時間: {0}時間{1}分", tMin / 60, tMin % 60);
 
             Chart[] charts = { _chartTotalProjectBar, _chartTotalProjectPie, _chartTotalCategoryBar, _chartTotalCategoryPie, _chartTotalStatusBar, _chartTotalStatusPie };
             foreach (var c in charts) c.Series.Clear();
 
             Action<Chart, Chart, List<ChartData>> populateTotalTimeCharts = (chartBar, chartPie, summaryData) => {
                 var seriesBar = chartBar.Series.Add("s"); seriesBar.ChartType = SeriesChartType.Column;
+                seriesBar.ToolTip = "#VALX: #VALY{F1} h";
                 var seriesPie = chartPie.Series.Add("s"); seriesPie.ChartType = SeriesChartType.Pie;
+                seriesPie.ToolTip = "#VALX: #VALY{F1} h (#PERCENT{P1})";
                 seriesPie["PieLabelStyle"] = "Outside"; seriesPie.Label = "#VALX (#PERCENT{P1})"; seriesPie.LabelForeColor = _isDarkMode ? Color.White : Color.Black;
                 foreach (var item in summaryData) {
                     if (item.value > 0) {
@@ -415,25 +567,162 @@ namespace TaskManager.Forms
                 }
 
                 double days = Math.Max(0, (totalDuration - excludedDuration).TotalDays);
+                
+                if (_settings != null && _settings.ExcludePendingTime)
+                {
+                    double pendingDays = GetPendingDays(t.ID, statusLogs);
+                    days = Math.Max(0, days - pendingDays);
+                }
+
                 validSpeeds.Add(new { t.ProjectID, t.カテゴリ, Days = days });
             }
 
-            var spProj = validSpeeds.GroupBy(x => (string)x.ProjectID).Select(g => {
+            var spProjList = validSpeeds.GroupBy(x => (string)x.ProjectID).Select(g => {
                 var p = _projects.FirstOrDefault(proj => proj.ProjectID == g.Key);
-                return new ChartData { label = p != null ? p.ProjectName : "(未分類)", value = g.Average(x => (double)x.Days) };
-            }).OrderByDescending(x => x.value).ToList();
+                return new { label = p != null ? p.ProjectName : "(未分類)", totalDays = g.Sum(x => (double)x.Days), count = g.Count() };
+            }).ToList();
 
-            var spCat = validSpeeds.Where(x => !string.IsNullOrEmpty((string)x.カテゴリ)).GroupBy(x => (string)x.カテゴリ)
-                .Select(g => new ChartData { label = g.Key, value = g.Average(x => (double)x.Days) })
-                .OrderByDescending(x => x.value).ToList();
+            var spCatList = validSpeeds.Where(x => !string.IsNullOrEmpty((string)x.カテゴリ)).GroupBy(x => (string)x.カテゴリ)
+                .Select(g => new { label = g.Key, totalDays = g.Sum(x => (double)x.Days), count = g.Count() })
+                .ToList();
+
+            string summaryFile = Path.Combine(_dataService.AppRoot, "report_summary_history.json");
+            var summaries = _dataService.LoadFromJson<List<ReportSummaryRecord>>(summaryFile, new List<ReportSummaryRecord>());
+            foreach (var s in summaries)
+            {
+                if (s.TaskCount > 0 && IsYearMonthInRange(s.YearMonth, start, end))
+                {
+                    string pName = string.IsNullOrEmpty(s.ProjectName) ? "(未分類)" : s.ProjectName;
+                    var pObj = spProjList.FirstOrDefault(p => p.label == pName);
+                    if (pObj != null) { spProjList.Remove(pObj); spProjList.Add(new { label = pName, totalDays = pObj.totalDays + (s.AverageSpeedDays * s.TaskCount), count = pObj.count + s.TaskCount }); }
+                    else spProjList.Add(new { label = pName, totalDays = s.AverageSpeedDays * s.TaskCount, count = s.TaskCount });
+
+                    if (!string.IsNullOrEmpty(s.Category))
+                    {
+                        string cName = s.Category;
+                        var cObj = spCatList.FirstOrDefault(c => c.label == cName);
+                        if (cObj != null) { spCatList.Remove(cObj); spCatList.Add(new { label = cName, totalDays = cObj.totalDays + (s.AverageSpeedDays * s.TaskCount), count = cObj.count + s.TaskCount }); }
+                        else spCatList.Add(new { label = cName, totalDays = s.AverageSpeedDays * s.TaskCount, count = s.TaskCount });
+                    }
+                }
+            }
+
+            var spProj = spProjList.Select(x => new ChartData { label = x.label, value = x.totalDays / x.count }).OrderByDescending(x => x.value).ToList();
+            var spCat = spCatList.Select(x => new ChartData { label = x.label, value = x.totalDays / x.count }).OrderByDescending(x => x.value).ToList();
 
             Action<Chart, List<ChartData>> populateSpeedChart = (chart, speedData) => {
                 var series = chart.Series.Add("s"); series.ChartType = SeriesChartType.Bar; series.IsValueShownAsLabel = true; 
                 series.LabelForeColor = _isDarkMode ? Color.White : Color.Black; series.LabelFormat = "F1";
+                series.ToolTip = "#VALX: #VALY{F1} 日";
                 foreach (var item in speedData) series.Points.AddXY(item.label, item.value);
             };
             populateSpeedChart(_chartSpeedProject, spProj);
             populateSpeedChart(_chartSpeedCategory, spCat);
+            
+            UpdateInsights();
+        }
+
+        private void GenerateWorkHoursReport()
+        {
+            _chartWorkHoursProject.Series.Clear(); _chartWorkHoursCategory.Series.Clear();
+            
+            var archivedTasks = _dataService.LoadTasksFromCsv(_dataService.ArchivedTasksFile) ?? new List<TaskItem>();
+            var allPotentialTasks = _allTasks.Concat(archivedTasks).ToList();
+
+            DateTime start = _chkAllTimeWorkHours.Checked ? DateTime.MinValue : _dtpStartWorkHours.Value.Date;
+            DateTime end = _chkAllTimeWorkHours.Checked ? DateTime.MaxValue : _dtpEndWorkHours.Value.Date.AddDays(1).AddSeconds(-1);
+
+            var completedTasks = allPotentialTasks.Where(t => t.進捗度 == "完了済み" && t.TrackedTimeSeconds > 0).ToList();
+            var validSpeeds = new List<dynamic>();
+
+            foreach (var t in completedTasks)
+            {
+                DateTime compTime;
+                if (!string.IsNullOrEmpty(t.CompletedAt) && DateTime.TryParse(t.CompletedAt, out compTime)) { }
+                else if (DateTime.TryParse(t.完了日, out compTime)) { compTime = compTime.Date.AddHours(23).AddMinutes(59).AddSeconds(59); }
+                else { continue; }
+
+                if (compTime < start || compTime > end) continue;
+
+                double hours = t.TrackedTimeSeconds / 3600.0;
+                validSpeeds.Add(new { t.ProjectID, t.カテゴリ, Hours = hours });
+            }
+
+            var whProjList = validSpeeds.GroupBy(x => (string)x.ProjectID).Select(g => {
+                var p = _projects.FirstOrDefault(proj => proj.ProjectID == g.Key);
+                return new { label = p != null ? p.ProjectName : "(未分類)", totalHours = g.Sum(x => (double)x.Hours), count = g.Count() };
+            }).ToList();
+
+            var whCatList = validSpeeds.Where(x => !string.IsNullOrEmpty((string)x.カテゴリ)).GroupBy(x => (string)x.カテゴリ)
+                .Select(g => new { label = g.Key, totalHours = g.Sum(x => (double)x.Hours), count = g.Count() })
+                .ToList();
+
+            string summaryFile = Path.Combine(_dataService.AppRoot, "report_summary_history.json");
+            var summaries = _dataService.LoadFromJson<List<ReportSummaryRecord>>(summaryFile, new List<ReportSummaryRecord>());
+            foreach (var s in summaries)
+            {
+                if (s.TaskCount > 0 && IsYearMonthInRange(s.YearMonth, start, end))
+                {
+                    string pName = string.IsNullOrEmpty(s.ProjectName) ? "(未分類)" : s.ProjectName;
+                    var pObj = whProjList.FirstOrDefault(p => p.label == pName);
+                    if (pObj != null) { whProjList.Remove(pObj); whProjList.Add(new { label = pName, totalHours = pObj.totalHours + s.TotalHours, count = pObj.count + s.TaskCount }); }
+                    else whProjList.Add(new { label = pName, totalHours = s.TotalHours, count = s.TaskCount });
+
+                    if (!string.IsNullOrEmpty(s.Category))
+                    {
+                        string cName = s.Category;
+                        var cObj = whCatList.FirstOrDefault(c => c.label == cName);
+                        if (cObj != null) { whCatList.Remove(cObj); whCatList.Add(new { label = cName, totalHours = cObj.totalHours + s.TotalHours, count = cObj.count + s.TaskCount }); }
+                        else whCatList.Add(new { label = cName, totalHours = s.TotalHours, count = s.TaskCount });
+                    }
+                }
+            }
+
+            var spProj = whProjList.Select(x => new ChartData { label = x.label, value = x.totalHours / x.count }).OrderByDescending(x => x.value).ToList();
+            var spCat = whCatList.Select(x => new ChartData { label = x.label, value = x.totalHours / x.count }).OrderByDescending(x => x.value).ToList();
+
+            Action<Chart, List<ChartData>> populateSpeedChart = (chart, speedData) => {
+                var series = chart.Series.Add("s"); series.ChartType = SeriesChartType.Bar; series.IsValueShownAsLabel = true; 
+                series.LabelForeColor = _isDarkMode ? Color.White : Color.Black; series.LabelFormat = "F1";
+                series.ToolTip = "#VALX: #VALY{F1} h";
+                foreach (var item in speedData) {
+                    string displayLabel = item.label;
+                    if (displayLabel != null && displayLabel.Length > 12) {
+                        displayLabel = displayLabel.Substring(0, 12) + "...";
+                    }
+                    series.Points.AddXY(displayLabel, item.value);
+                }
+            };
+            populateSpeedChart(_chartWorkHoursProject, spProj);
+            populateSpeedChart(_chartWorkHoursCategory, spCat);
+            
+            UpdateInsights();
+        }
+
+        private void GenerateMetricsReport()
+        {
+            _chartAppSwitch.Series.Clear(); _chartCpuLoad.Series.Clear();
+            string logsFile = Path.Combine(_dataService.AppRoot, "pc_metrics_logs.json");
+            var metricsLogs = _dataService.LoadFromJson<List<PcMetricsLog>>(logsFile, new List<PcMetricsLog>());
+            var start = _dtpStartMetrics.Value.Date;
+            var end = _dtpEndMetrics.Value.Date.AddDays(1).AddSeconds(-1);
+            var filtered = metricsLogs.Where(l => {
+                DateTime dt;
+                return DateTime.TryParse(l.Timestamp, out dt) && dt >= start && dt <= end;
+            }).ToList();
+
+            if (filtered.Count == 0) return;
+
+            var hourGroups = filtered.GroupBy(l => DateTime.Parse(l.Timestamp).Hour).OrderBy(g => g.Key);
+            var sAppSwitch = _chartAppSwitch.Series.Add("アプリ切り替え回数");
+            sAppSwitch.ChartType = SeriesChartType.Column;
+            foreach (var g in hourGroups) sAppSwitch.Points.AddXY(g.Key.ToString() + "時", g.Average(l => l.AppSwitchCount));
+
+            var dayGroups = filtered.GroupBy(l => DateTime.Parse(l.Timestamp).DayOfWeek).OrderBy(g => ((int)g.Key + 6) % 7);
+            var sCpuLoad = _chartCpuLoad.Series.Add("平均CPU使用率(%)");
+            sCpuLoad.ChartType = SeriesChartType.Column;
+            string[] dowNames = { "日", "月", "火", "水", "木", "金", "土" };
+            foreach (var g in dayGroups) sCpuLoad.Points.AddXY(dowNames[(int)g.Key], g.Average(l => l.CpuLoadPercent));
             
             UpdateInsights();
         }
@@ -456,6 +745,26 @@ namespace TaskManager.Forms
             double totalHours = dataForCharts.Sum(d => d.Hours);
             var projectSummary = dataForCharts.GroupBy(d => d.ProjectName).Select(g => new ChartData { label = g.Key, value = g.Sum(x => (double)x.Hours) }).ToList();
             var categorySummary = dataForCharts.GroupBy(d => d.Category).Select(g => new ChartData { label = g.Key, value = g.Sum(x => (double)x.Hours) }).ToList();
+
+            string summaryFile = Path.Combine(_dataService.AppRoot, "report_summary_history.json");
+            var summaries = _dataService.LoadFromJson<List<ReportSummaryRecord>>(summaryFile, new List<ReportSummaryRecord>());
+            foreach (var s in summaries)
+            {
+                if (IsYearMonthInRange(s.YearMonth, startT, endT))
+                {
+                    totalHours += s.TotalHours;
+                    
+                    string pName = string.IsNullOrEmpty(s.ProjectName) ? "(未分類)" : s.ProjectName;
+                    var pObj = projectSummary.FirstOrDefault(p => p.label == pName);
+                    if (pObj != null) pObj.value += s.TotalHours;
+                    else projectSummary.Add(new ChartData { label = pName, value = s.TotalHours });
+
+                    string cName = string.IsNullOrEmpty(s.Category) ? "(未分類)" : s.Category;
+                    var cObj = categorySummary.FirstOrDefault(c => c.label == cName);
+                    if (cObj != null) cObj.value += s.TotalHours;
+                    else categorySummary.Add(new ChartData { label = cName, value = s.TotalHours });
+                }
+            }
 
             if (categorySummary.Count > 1) {
                 insights += "• [良好]  時間の分類が適切に行われています。時間の使い方の内訳が明確で、振り返りやすい状態です。\r\n";
@@ -539,11 +848,105 @@ namespace TaskManager.Forms
                 if (zeroDayCount >= zeroDayTaskCount) {
                     insights += string.Format("• [指摘]  登録したその日に完了したタスクが {0} 件あります。タスクの粒度が細かい、または事前計画を行わずに着手している可能性があります。\r\n", zeroDayCount);
                 }
+
+                var gapTasks = _allTasks.Concat(_dataService.LoadTasksFromCsv(_dataService.ArchivedTasksFile) ?? new List<TaskItem>())
+                    .Where(t => t.進捗度 == "完了済み" && !string.IsNullOrEmpty(t.カテゴリ) && t.TargetHours.HasValue && t.TargetHours.Value > 0).ToList();
+
+                bool hasGapExceeded = false;
+                if (gapTasks.Any())
+                {
+                    var categoryGaps = gapTasks.GroupBy(t => t.カテゴリ).ToList();
+                    foreach (var group in categoryGaps)
+                    {
+                        double avgTarget = group.Average(t => t.TargetHours.Value);
+                        double avgTracked = group.Average(t => t.TrackedTimeSeconds / 3600.0);
+
+                        if (avgTarget > 0 && avgTracked >= avgTarget * 1.2)
+                        {
+                            insights += string.Format("• [見積もり超過] ⚠️ 『{0}』カテゴリの作業は、目標に対して実績が大幅に超過しています（目標平均 {1:F1}h vs 実績平均 {2:F1}h）。\r\n", group.Key, avgTarget, avgTracked);
+                            hasGapExceeded = true;
+                        }
+                        else if (avgTarget > 0 && avgTracked <= avgTarget * 0.5)
+                        {
+                            insights += string.Format("• [見積もり過大] ⚠️ 『{0}』カテゴリの作業は、目標に対して実績が極端に少ないです（目標平均 {1:F1}h vs 実績平均 {2:F1}h）。見積もりが過大か、記録漏れの可能性があります。\r\n", group.Key, avgTarget, avgTracked);
+                            hasGapExceeded = true;
+                        }
+                    }
+                    if (!hasGapExceeded)
+                    {
+                        insights += "• [見積もり精度] 🎯 見積もり精度が非常に高いです。計画通りに作業が進められています。\r\n";
+                    }
+                }
+
+                if (_chartWorkHoursCategory != null && _chartWorkHoursCategory.Series.Count > 0 && _chartWorkHoursCategory.Series[0].Points.Count > 0) {
+                    var whCat = _chartWorkHoursCategory.Series[0].Points.Select(p => new ChartData { label = p.AxisLabel, value = p.YValues[0] }).ToList();
+                    if (whCat.Any()) {
+                        var avgWh = whCat.Average(c => c.value);
+                        insights += string.Format("• [分析]  タスクの平均実働時間は全体で {0:F1} hです。\r\n", avgWh);
+                        var fastestWhCat = whCat.OrderBy(c => c.value).First();
+                        insights += string.Format("  - 最も実働時間が短い傾向にあるのは「{0}」({1:F1} h) です。\r\n", fastestWhCat.label, fastestWhCat.value);
+                    }
+                }
+
                 if (spCat.Any()) {
                     var avgCt = spCat.Average(c => c.value);
                     insights += string.Format("• [分析]  タスク着手から完了(実質サイクルタイム)の全体平均は {0:F1} 日です。\r\n", avgCt);
                     var fastestCat = spCat.OrderBy(c => c.value).First();
                     insights += string.Format("  - 最も早く完了する傾向にあるのは「{0}」({1:F1} 日) です。\r\n", fastestCat.label, fastestCat.value);
+                }
+
+                if (_settings != null && _settings.ExcludePendingTime)
+                {
+                    var statusLogsForInsight = _dataService.LoadFromJson<List<StatusLog>>(_dataService.StatusLogsFile, new List<StatusLog>());
+                    var insightCompletedTasks = _allTasks.Concat(_dataService.LoadTasksFromCsv(_dataService.ArchivedTasksFile) ?? new List<TaskItem>())
+                        .Where(t => t.進捗度 == "完了済み" && t.TargetHours.HasValue && t.TargetHours.Value > 0 && !string.IsNullOrEmpty(t.StartedAt)).ToList();
+
+                    int metTargetCount = 0;
+                    int totalTargetCount = insightCompletedTasks.Count;
+                    
+                    foreach (var t in insightCompletedTasks)
+                    {
+                        DateTime startTime;
+                        DateTime compTime;
+                        if (!DateTime.TryParse(t.StartedAt, out startTime)) continue;
+                        if (!string.IsNullOrEmpty(t.CompletedAt) && DateTime.TryParse(t.CompletedAt, out compTime)) { }
+                        else if (DateTime.TryParse(t.完了日, out compTime)) { compTime = compTime.Date.AddHours(23).AddMinutes(59).AddSeconds(59); }
+                        else { continue; }
+
+                        if (compTime < startTime) compTime = startTime;
+                        double totalDays = (compTime - startTime).TotalDays;
+                        double pendingDays = GetPendingDays(t.ID, statusLogsForInsight);
+                        double pureDays = Math.Max(0, totalDays - pendingDays);
+                        
+                        if (pureDays * 24.0 <= t.TargetHours.Value) 
+                        {
+                            metTargetCount++;
+                        }
+                    }
+
+                    if (totalTargetCount > 0)
+                    {
+                        insights += string.Format("• [目標達成度] 🎯 保留・確認待ち時間を除外した「純粋な実稼働日数」において、{0} 件中 {1} 件のタスクで目標を達成しました。他者の要因による遅延を帳消しにすると、本来の生産性は高く維持されています。\r\n", totalTargetCount, metTargetCount);
+                    }
+                }
+
+                string logsFileMetrics = Path.Combine(_dataService.AppRoot, "pc_metrics_logs.json");
+                var metricsLogs = _dataService.LoadFromJson<List<PcMetricsLog>>(logsFileMetrics, new List<PcMetricsLog>());
+                var filteredMetrics = metricsLogs.Where(l => { DateTime dt; return DateTime.TryParse(l.Timestamp, out dt) && dt >= startT && dt <= endT; }).ToList();
+                if (filteredMetrics.Any())
+                {
+                    double avgSwitches = filteredMetrics.Average(l => l.AppSwitchCount);
+                    if (avgSwitches > 50) { 
+                        insights += string.Format("• [集中度低下]  アプリの切り替え回数が5分あたり平均 {0:F1} 回と非常に多いです。マルチタスクが過剰になり集中力が削がれている可能性があります。ウィンドウを全画面にするなど、1つの作業に集中する工夫を検討してください。\r\n", avgSwitches);
+                    } else if (avgSwitches < 15) {
+                        insights += string.Format("• [集中度良好]  アプリの切り替え回数が少なく（5分あたり平均 {0:F1} 回）、一つの作業に集中できている傾向があります。\r\n", avgSwitches);
+                    }
+                    var highLoadLogs = filteredMetrics.Where(l => l.CpuLoadPercent > 70).ToList();
+                    if (highLoadLogs.Any())
+                    {
+                        var worstHour = highLoadLogs.GroupBy(l => DateTime.Parse(l.Timestamp).Hour).OrderByDescending(g => g.Count()).First().Key;
+                        insights += string.Format("• [PC負荷]  {0}時台にPCの負荷（CPU使用率）が高くなる傾向があります。この時間帯は重い処理（ビルドや動画出力など）を避けるか、PCを休ませることを推奨します。\r\n", worstHour);
+                    }
                 }
             }
 
@@ -563,9 +966,17 @@ namespace TaskManager.Forms
                 {
                     // グラフ画像をBase64文字列に変換するヘルパー関数
                     Func<Chart, string> getChartImage = (chart) => {
-                        using (var ms = new MemoryStream()) {
-                            chart.SaveImage(ms, ChartImageFormat.Png);
-                            return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                        try {
+                            // 描画エラー(非表示タブでサイズが0になる問題)を防止
+                            if (chart.Width <= 0 || chart.Height <= 0) {
+                                chart.Size = new Size(500, 350);
+                            }
+                            using (var ms = new MemoryStream()) {
+                                chart.SaveImage(ms, ChartImageFormat.Png);
+                                return "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                            }
+                        } catch {
+                            return "";
                         }
                     };
 
@@ -573,19 +984,20 @@ namespace TaskManager.Forms
                     sb.AppendLine("<!DOCTYPE html>");
                     sb.AppendLine("<html lang=\"ja\"><head><meta charset=\"UTF-8\"><title>分析レポートサマリー</title>");
                     sb.AppendLine("<style>");
-                    sb.AppendLine("body { font-family: 'Segoe UI', 'Meiryo UI', sans-serif; background-color: #f0f2f5; color: #333; margin: 0; padding: 20px; }");
-                    sb.AppendLine(".container { max-width: 1200px; margin: auto; }");
-                    sb.AppendLine("h1 { text-align: center; color: #2c3e50; margin-bottom: 5px; }");
-                    sb.AppendLine(".subtitle { text-align: center; color: #7f8c8d; margin-bottom: 30px; }");
-                    sb.AppendLine(".card { background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); padding: 20px; margin-bottom: 30px; }");
-                    sb.AppendLine(".card h2 { margin-top: 0; color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 20px; }");
-                    sb.AppendLine("pre { background: #f8f9fa; padding: 15px; border-radius: 5px; white-space: pre-wrap; font-family: inherit; font-size: 15px; line-height: 1.6; border-left: 4px solid #3498db; margin: 0; }");
+                    sb.AppendLine("body { font-family: 'Segoe UI', 'Meiryo UI', sans-serif; background-color: #f8f9fa; color: #202124; margin: 0; padding: 20px; }");
+                    sb.AppendLine(".container { max-width: 1200px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }");
+                    sb.AppendLine("h1 { text-align: center; color: #1a73e8; margin-bottom: 5px; font-size: 28px; border-bottom: 2px solid #e8eaed; padding-bottom: 10px; }");
+                    sb.AppendLine(".subtitle { text-align: center; color: #5f6368; margin-bottom: 30px; font-size: 14px; }");
+                    sb.AppendLine(".card { background: #ffffff; border: 1px solid #e8eaed; border-radius: 8px; padding: 20px; margin-bottom: 30px; }");
+                    sb.AppendLine(".card h2 { margin-top: 0; color: #202124; font-size: 18px; border-left: 4px solid #1a73e8; padding-left: 10px; margin-bottom: 20px; }");
+                    sb.AppendLine("pre { background: #f1f3f4; padding: 15px; border-radius: 6px; white-space: pre-wrap; font-family: inherit; font-size: 14px; line-height: 1.6; color: #3c4043; border: 1px solid #e8eaed; margin: 0; }");
                     sb.AppendLine(".grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }");
                     sb.AppendLine(".grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }");
                     sb.AppendLine(".col-stack { display: flex; flex-direction: column; gap: 15px; }");
-                    sb.AppendLine(".chart-container { text-align: center; background: #fafafa; padding: 10px; border-radius: 6px; }");
-                    sb.AppendLine(".chart-container img { max-width: 100%; height: auto; border: 1px solid #eaeaea; border-radius: 4px; background: white; }");
-                    sb.AppendLine(".chart-title { font-weight: bold; margin-bottom: 10px; color: #555; font-size: 14px; }");
+                    sb.AppendLine(".chart-container { text-align: center; background: #fff; padding: 15px; border-radius: 8px; border: 1px solid #e8eaed; transition: box-shadow 0.3s; }");
+                    sb.AppendLine(".chart-container:hover { box-shadow: 0 4px 8px rgba(0,0,0,0.1); }");
+                    sb.AppendLine(".chart-container img { max-width: 100%; height: auto; border-radius: 4px; }");
+                    sb.AppendLine(".chart-title { font-weight: bold; margin-bottom: 15px; color: #5f6368; font-size: 15px; }");
                     sb.AppendLine("</style>");
                     sb.AppendLine("</head><body>");
                     sb.AppendLine("<div class=\"container\">");
@@ -610,7 +1022,19 @@ namespace TaskManager.Forms
                     sb.AppendLine("<div class=\"card\"><h2>⏱️ 完了スピード (実質日数)</h2><div class=\"grid-2\">");
                     sb.AppendLine(string.Format("<div class=\"chart-container\"><div class=\"chart-title\">プロジェクト別 平均完了日数</div><img src=\"{0}\" /></div>", getChartImage(_chartSpeedProject)));
                     sb.AppendLine(string.Format("<div class=\"chart-container\"><div class=\"chart-title\">カテゴリ別 平均完了日数</div><img src=\"{0}\" /></div>", getChartImage(_chartSpeedCategory)));
-                    sb.AppendLine("</div></div></div></body></html>");
+                    sb.AppendLine("</div></div>");
+
+                    sb.AppendLine("<div class=\"card\"><h2>⏳ 平均実働時間</h2><div class=\"grid-2\">");
+                    sb.AppendLine(string.Format("<div class=\"chart-container\"><div class=\"chart-title\">プロジェクト別 平均実働時間 (h)</div><img src=\"{0}\" /></div>", getChartImage(_chartWorkHoursProject)));
+                    sb.AppendLine(string.Format("<div class=\"chart-container\"><div class=\"chart-title\">カテゴリ別 平均実働時間 (h)</div><img src=\"{0}\" /></div>", getChartImage(_chartWorkHoursCategory)));
+                    sb.AppendLine("</div></div>");
+
+                    sb.AppendLine("<div class=\"card\"><h2>💻 PC負荷・集中度</h2><div class=\"grid-2\">");
+                    sb.AppendLine(string.Format("<div class=\"chart-container\"><div class=\"chart-title\">時間帯別 平均アプリ切り替え回数</div><img src=\"{0}\" /></div>", getChartImage(_chartAppSwitch)));
+                    sb.AppendLine(string.Format("<div class=\"chart-container\"><div class=\"chart-title\">曜日別 平均CPU使用率</div><img src=\"{0}\" /></div>", getChartImage(_chartCpuLoad)));
+                    sb.AppendLine("</div></div>");
+                    
+                    sb.AppendLine("</div></body></html>");
 
                     File.WriteAllText(sfd.FileName, sb.ToString(), Encoding.UTF8);
                     

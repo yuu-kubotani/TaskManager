@@ -1,9 +1,9 @@
-﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormNotification : Form
     {
@@ -18,6 +18,7 @@ namespace TaskManager.Forms
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var lblHeader = new Label { Text = "以下のアイテムが期日を迎えます：", Location = new Point(10, 10), Font = new Font("Meiryo UI", 10, FontStyle.Bold), AutoSize = true };
             this.Controls.Add(lblHeader);

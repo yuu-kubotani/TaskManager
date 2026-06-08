@@ -1,10 +1,10 @@
 ﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Utils;
+using UniConsul.Models;
+using UniConsul.Utils;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormEventInput : Form
     {
@@ -96,6 +96,7 @@ namespace TaskManager.Forms
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             this.Controls.Add(new Label { Text = "タイトル：", Location = new Point(15, 15), AutoSize = true });
             textTitle = new TextBox { Location = new Point(15, 35), Size = new Size(350, 25) };

@@ -30,17 +30,30 @@ for %%f in (%OLD_MODELS%) do (
     )
 )
 
-rem 4. ゴミファイルや古いバッチ、不要になった旧ビルドツールの削除
-set MISC_FILES=0 file_list.txt start.bat UndoCommands.cs NativeMethods.cs Run.bat run.bat nuget.exe compiled_files_list.txt
+rem 4. 不要なファイルの削除 (重複ファイルや設定ファイルの残骸)
+set MISC_FILES=0 file_list.txt start.bat UndoCommands.cs NativeMethods.cs Run.bat run.bat nuget.exe compiled_files_list.txt config.json settings.json Docs\README.md
 for %%f in (%MISC_FILES%) do (
     if exist "%%f" (
         echo 不要ファイル %%f を削除しています...
         del /f /q "%%f"
     )
 )
-if exist "packages" (
-    echo 古いpackagesフォルダを削除しています...
-    rmdir /s /q "packages"
+
+rem 5. 不要なフォルダの削除 (古いバックアップや開発環境のキャッシュ)
+set OLD_DIRS=packages Helpers Legacy_PowerShell .vscode bin obj
+for %%d in (%OLD_DIRS%) do (
+    if exist "%%d" (
+        echo 不要フォルダ %%d を削除しています...
+        rmdir /s /q "%%d"
+    )
+)
+
+rem 6. Toolsフォルダの整理 (空の場合のみ削除)
+if exist "Tools" (
+    dir /b /a "Tools" | findstr "^" >nul || (
+        echo 空の Tools フォルダを削除しています...
+        rmdir /q "Tools"
+    )
 )
 
 echo.

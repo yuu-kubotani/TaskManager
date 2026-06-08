@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Services;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormCategoryEditor : Form
     {
@@ -26,6 +26,7 @@ namespace TaskManager.Forms
             this.Size = new Size(500, 450);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var splitContainer = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 240 };
             
@@ -33,6 +34,9 @@ namespace TaskManager.Forms
             var groupCat = new GroupBox { Text = "カテゴリ", Dock = DockStyle.Fill };
             _listCat = new ListBox { Dock = DockStyle.Fill };
             _listCat.SelectedIndexChanged += (s, e) => RefreshSubCategories();
+            _listCat.KeyDown += (s, e) => {
+                if (e.KeyCode == Keys.Delete) BtnDelCat_Click(s, e);
+            };
             
             var panelCatBtns = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 35 };
             var btnAddCat = new Button { Text = "追加", Width = 55 };
@@ -51,6 +55,9 @@ namespace TaskManager.Forms
             // 右側: サブカテゴリ
             var groupSub = new GroupBox { Text = "サブカテゴリ", Dock = DockStyle.Fill };
             _listSub = new ListBox { Dock = DockStyle.Fill };
+            _listSub.KeyDown += (s, e) => {
+                if (e.KeyCode == Keys.Delete) BtnDelSub_Click(s, e);
+            };
             
             var panelSubBtns = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 35 };
             var btnAddSub = new Button { Text = "追加", Width = 55 };
@@ -80,6 +87,26 @@ namespace TaskManager.Forms
             
             RefreshCategories();
             ThemeManager.ApplyTheme(this, isDarkMode);
+            DataService.DataUpdated += DataService_DataUpdated;
+        }
+
+        private void DataService_DataUpdated(object sender, EventArgs e)
+        {
+            if (this.IsDisposed) return;
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => DataService_DataUpdated(sender, e)));
+                return;
+            }
+            
+            _categories = _dataService.LoadFromJson<Dictionary<string, List<string>>>(_dataService.CategoriesFile, new Dictionary<string, List<string>>());
+            
+            object selCat = _listCat.SelectedItem;
+            _listCat.Items.Clear();
+            foreach (var cat in _categories.Keys.OrderBy(k => k)) _listCat.Items.Add(cat);
+            if (selCat != null && _categories.ContainsKey(selCat.ToString())) _listCat.SelectedItem = selCat;
+            
+            RefreshSubCategories();
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -90,6 +117,12 @@ namespace TaskManager.Forms
                 DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
                 DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
             } catch { }
+        }
+        
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            DataService.DataUpdated -= DataService_DataUpdated;
+            base.OnFormClosed(e);
         }
 
         private void RefreshCategories()

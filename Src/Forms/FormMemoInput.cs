@@ -1,9 +1,9 @@
-﻿using System;
+﻿﻿﻿﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
-using TaskManager.Services;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormMemoInput : Form
     {
@@ -37,6 +37,7 @@ namespace TaskManager.Forms
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             txtMemo = new TextBox
             {

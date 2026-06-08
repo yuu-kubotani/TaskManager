@@ -3,10 +3,10 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormBackupRestore : Form
     {
@@ -22,7 +22,7 @@ namespace TaskManager.Forms
         {
             _dataService = dataService;
             _settings = settings;
-            _backupRoot = (settings != null && !string.IsNullOrEmpty(settings.BackupPath)) ? settings.BackupPath : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "backup");
+            _backupRoot = (settings != null && !string.IsNullOrEmpty(settings.BackupPath)) ? settings.BackupPath : Path.Combine(_dataService.AppRoot, "backup");
 
             if (!Directory.Exists(_backupRoot)) Directory.CreateDirectory(_backupRoot);
 
@@ -30,6 +30,7 @@ namespace TaskManager.Forms
             this.Size = new Size(400, 350);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var lbl = new Label { Text = "復元したいバックアップを選択してください:", Location = new Point(10, 10), AutoSize = true };
             _listBackups = new ListBox { Location = new Point(10, 35), Size = new Size(360, 210) };
@@ -73,7 +74,7 @@ namespace TaskManager.Forms
             {
                 string dest = Path.Combine(_backupRoot, DateTime.Now.ToString("yyyy-MM-dd_HH-mm-ss"));
                 Directory.CreateDirectory(dest);
-                string[] files = { _dataService.TasksFile, _dataService.ProjectsFile, _dataService.CategoriesFile, _dataService.EventsFile, _dataService.TimeLogsFile, _dataService.SettingsFile, Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "holidays.json") };
+                string[] files = { _dataService.TasksFile, _dataService.ProjectsFile, _dataService.CategoriesFile, _dataService.EventsFile, _dataService.TimeLogsFile, _dataService.SettingsFile, Path.Combine(_dataService.AppRoot, "holidays.json") };
                 foreach (var f in files) if (File.Exists(f)) File.Copy(f, Path.Combine(dest, Path.GetFileName(f)), true);
                 
                 MessageBox.Show("バックアップが完了しました。", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -93,7 +94,7 @@ namespace TaskManager.Forms
                 {
                     string srcDir = Path.Combine(_backupRoot, selected);
                     foreach (var file in Directory.GetFiles(srcDir))
-                        File.Copy(file, Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Path.GetFileName(file)), true);
+                        File.Copy(file, Path.Combine(_dataService.AppRoot, Path.GetFileName(file)), true);
                     
                     this.DialogResult = DialogResult.OK;
                     this.Close();

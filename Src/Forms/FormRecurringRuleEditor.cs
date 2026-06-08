@@ -1,12 +1,12 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormRecurringRuleEditor : Form
     {
@@ -52,6 +52,7 @@ namespace TaskManager.Forms
             this.StartPosition = FormStartPosition.CenterParent;
             this.MinimizeBox = false;
             this.MaximizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             _dtpNextRun = new DateTimePicker { Format = DateTimePickerFormat.Short, Width = 120 };
 

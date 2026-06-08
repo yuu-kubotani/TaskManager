@@ -1,13 +1,28 @@
-﻿using System.Drawing;
+﻿﻿using System.Drawing;
 using System.Windows.Forms;
-using TaskManager.Native;
+using UniConsul.Native;
 
-namespace TaskManager
+namespace UniConsul
 {
     public static class ThemeManager
     {
         public static void ApplyTheme(Form form, bool isDarkMode)
         {
+            // --- 全フォーム共通でアイコンを適用する ---
+            try {
+                string iconPath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "icon.ico");
+                if (System.IO.File.Exists(iconPath)) {
+                    form.Icon = new Icon(iconPath);
+                } else {
+                    string pngPath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "uni consul（ユニコン）.png");
+                    if (!System.IO.File.Exists(pngPath)) pngPath = @"C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\uni consul（ユニコン）.png";
+                    if (System.IO.File.Exists(pngPath)) {
+                        using (var bmp = new Bitmap(pngPath)) { form.Icon = Icon.FromHandle(bmp.GetHicon()); }
+                    }
+                }
+            } catch { }
+            // ----------------------------------------
+
             Color backColor = isDarkMode ? Color.FromArgb(30, 30, 30) : SystemColors.Control;
             Color foreColor = isDarkMode ? Color.White : SystemColors.ControlText;
             Color controlBack = isDarkMode ? Color.FromArgb(45, 45, 48) : SystemColors.Window;

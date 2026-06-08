@@ -1,6 +1,6 @@
 ﻿using System.Windows.Forms;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public static class Prompt
     {

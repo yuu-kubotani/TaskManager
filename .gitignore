@@ -1,60 +1,22 @@
-### ユーザーデータ・設定ファイル ###
-
-# CSVファイル（基本は除外、初期マスターデータのみ管理に含める）
-*.csv
-!master_data.csv
-
-# JSONファイル（基本は除外、アプリの起動に必要な設定ファイルのみ管理に含める）
-*.json
-!appsettings.json
-!appsettings.Development.json
-!Properties/launchSettings.json
-
-# XMLファイル
-*.xml
-
-### ログ・レポート・バックアップ ###
-*.log
-*.html
-backup/
-
-
-### C# / .NET 関連 ###
-# ビルド成果物と一時ファイル
+# Visual Studio / .NET project files to ignore
+## Build artifacts
 bin/
 obj/
-.vs/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-TestResults/
 
-# NuGet パッケージ（依存関係はビルド時に復元されるため除外）
-*.nupkg
+## User-specific data
+Data/
+
+## Publish folder
+publish/
+
+## NuGet packages
 packages/
 
-
-### データベース・環境変数関連 ###
-# ローカルDBファイルやAPIキーなどの流出を防ぐ
-*.db
-*.sqlite
-*.sqlite3
-*.mdf
-*.ldf
-.env
-
-### OS / エディタ関連 ###
-# VSCode
+## Visual Studio Code settings
 .vscode/
 
-# JetBrains Rider
-.idea/
-
-# Windows の一時ファイル
-*.tmp
-Desktop.ini
-Thumbs.db
-
-# macOS
-.DS_Store
+## Other temporary files
+*.user
+*.suo
+*.bak
+*.log

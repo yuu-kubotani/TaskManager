@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta charset="UTF-8">
+    <title>タスク実績レポート (__START_DATE__ - __END_DATE__)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        body { font-family: 'Meiryo UI', 'Segoe UI', 'Helvetica Neue', sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 1400px; margin: auto; background: white; padding: 20px; box-shadow: 0 0 15px rgba(0,0,0,0.1); border-radius: 8px; }
+        h1, h2, h3 { color: #2c3e50; }
+        h1 { border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        h2 { margin-top: 20px; border-left: 5px solid #3498db; padding-left: 10px; }
+        .summary { text-align: center; background-color: #ecf0f1; padding: 15px; border-radius: 5px; margin-bottom: 25px; }
+        .summary .value { font-size: 2em; font-weight: bold; color: #3498db; }
+        .tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 20px; }
+        .tab-link { padding: 10px 15px; cursor: pointer; border: 1px solid transparent; border-bottom: 0; margin-bottom: -1px; transition: background-color 0.2s; }
+        .tab-link:hover { background-color: #f0f0f0; }
+        .tab-link.active { border-color: #ddd; border-bottom: 1px solid white; background-color: white; border-radius: 5px 5px 0 0; font-weight: bold; }
+        .tab-content { display: none; animation: fadeIn 0.5s; }
+        .tab-content.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .controls { margin-bottom: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; display: flex; align-items: center; gap: 20px; }
+        .controls label { font-weight: bold; }
+        .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 20px; margin-top: 20px; }
+        .trend-chart-container { grid-column: 1 / -1; margin-top: 20px; }
+        .chart-container { position: relative; height: 45vh; min-height: 400px; width: 100%; }
+        .radio-group input[type="radio"] { display: none; }
+        .radio-group label { display: inline-block; padding: 8px 16px; background-color: #fff; border: 1px solid #ccc; cursor: pointer; border-radius: 4px; transition: all 0.2s; }
+        .radio-group input[type="radio"]:checked + label { background-color: #3498db; color: #fff; border-color: #3498db; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>タスク実績レポート</h1>
+    <h2>対象期間: __START_DATE__ - __END_DATE__</h2>
+
+    <div class="summary">
+        <h3>総作業時間</h3>
+        <div class="value">__TOTAL_TIME__</div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab-link active" onclick="openTab(event, 'projects')">📂 プロジェクト</div>
+        <div class="tab-link" onclick="openTab(event, 'categories')">🏷️ カテゴリ</div>
+        <div class="tab-link" onclick="openTab(event, 'status')">📊 ステータス</div>
+        <div class="tab-link" onclick="openTab(event, 'speed')">⏱️ 完了スピード</div>
+    </div>
+
+    <div id="projects" class="tab-content active">
+        <h2>プロジェクト別</h2>
+        <div class="chart-grid">
+            <div class="chart-container"><canvas id="projectPieChart"></canvas></div>
+            <div class="chart-container"><canvas id="projectBarChart"></canvas></div>
+            <div class="trend-chart-container chart-container">
+                <div class="controls">
+                    <label>日別推移グラフの種類:</label>
+                    <div class="radio-group">
+                        <input type="radio" id="chartTypeLine" name="chartType" value="line" checked onchange="updateCurrentTrendChart()">
+                        <label for="chartTypeLine">📈 積み上げ面グラフ</label>
+                        <input type="radio" id="chartTypeBar" name="chartType" value="bar" onchange="updateCurrentTrendChart()">
+                        <label for="chartTypeBar">📊 積み上げ棒グラフ</label>
+                    </div>
+                </div>
+                <canvas id="projectDailyChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div id="categories" class="tab-content">
+        <h2>カテゴリ別</h2>
+        <div class="chart-grid">
+            <div class="chart-container"><canvas id="categoryPieChart"></canvas></div>
+            <div class="chart-container"><canvas id="categoryBarChart"></canvas></div>
+            <div class="trend-chart-container chart-container">
+                <div class="controls">
+                    <label>日別推移グラフの種類:</label>
+                    <div class="radio-group">
+                        <input type="radio" id="chartTypeLine2" name="chartType2" value="line" checked onchange="updateCurrentTrendChart()">
+                        <label for="chartTypeLine2">📈 積み上げ面グラフ</label>
+                        <input type="radio" id="chartTypeBar2" name="chartType2" value="bar" onchange="updateCurrentTrendChart()">
+                        <label for="chartTypeBar2">📊 積み上げ棒グラフ</label>
+                    </div>
+                </div>
+                <canvas id="categoryDailyChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div id="status" class="tab-content">
+        <h2>ステータス別</h2>
+        <div class="chart-grid">
+             <div class="chart-container"><canvas id="statusPieChart"></canvas></div>
+             <div class="chart-container"><canvas id="statusBarChart"></canvas></div>
+             <div class="trend-chart-container chart-container">
+                <div class="controls">
+                    <label>日別推移グラフの種類:</label>
+                    <div class="radio-group">
+                        <input type="radio" id="chartTypeLine3" name="chartType3" value="line" checked onchange="updateCurrentTrendChart()">
+                        <label for="chartTypeLine3">📈 積み上げ面グラフ</label>
+                        <input type="radio" id="chartTypeBar3" name="chartType3" value="bar" onchange="updateCurrentTrendChart()">
+                        <label for="chartTypeBar3">📊 積み上げ棒グラフ</label>
+                    </div>
+                </div>
+                <canvas id="statusDailyChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div id="speed" class="tab-content">
+        <h2>完了スピード</h2>
+        <div class="chart-grid">
+            <div class="chart-container"><canvas id="speedProjectChart"></canvas></div>
+            <div class="chart-container"><canvas id="speedCategoryChart"></canvas></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const allChartData = {
+        dailyProject: __JSON_DAILY_PROJECT_DATA__,
+        dailyCategory: __JSON_DAILY_CATEGORY_DATA__,
+        dailyStatus: __JSON_DAILY_STATUS_DATA__,
+        summaryProject: __JSON_PROJECT_SUMMARY__,
+        summaryCategory: __JSON_CATEGORY_SUMMARY__,
+        summaryStatus: __JSON_STATUS_SUMMARY__,
+        speedProject: __JSON_SPEED_PROJECT_DATA__,
+        speedCategory: __JSON_SPEED_CATEGORY_DATA__
+    };
+
+    const chartColors = ['#3498db', '#2ecc71', '#e74c3c', '#9b59b6', '#f1c40f', '#1abc9c', '#34495e', '#e67e22', '#7f8c8d', '#d35400', '#2980b9', '#27ae60', '#c0392b', '#8e44ad'];
+    const getColors = (count) => {
+        const colors = Array.from({length: count}, (_, i) => chartColors[i % chartColors.length]);
+        return colors;
+    };
+
+    const chartInstances = {};
+    let activeTab = 'projects';
+    const renderedTabs = {};
+
+    function openTab(evt, tabName) {
+        activeTab = tabName;
+        let i, tabcontent, tablinks;
+        tabcontent = document.getElementsByClassName("tab-content");
+        for (i = 0; i < tabcontent.length; i++) {
+            tabcontent[i].style.display = "none";
+        }
+        tablinks = document.getElementsByClassName("tab-link");
+        for (i = 0; i < tablinks.length; i++) {
+            tablinks[i].className = tablinks[i].className.replace(" active", "");
+        }
+        
+        document.getElementById(tabName).style.display = "block";
+        evt.currentTarget.className += " active";
+
+        if (!renderedTabs[tabName]) {
+            renderChartsForTab(tabName);
+            renderedTabs[tabName] = true;
+        }
+    }
+
+    function renderChartsForTab(tabName) {
+        // Destroy all charts for the specific tab before rendering
+        const keysToDestroy = Object.keys(chartInstances).filter(k => k.toLowerCase().includes(tabName.slice(0, -1)));
+        keysToDestroy.forEach(key => chartInstances[key]?.destroy());
+
+        switch(tabName) {
+            case 'projects':
+                chartInstances.projectPie = createSummaryChart('projectPieChart', 'pie', allChartData.summaryProject, '合計時間 (円グラフ)');
+                chartInstances.projectBar = createSummaryChart('projectBarChart', 'bar', allChartData.summaryProject, '合計時間 (棒グラフ)');
+                chartInstances.projectTrend = createTrendChart('projectDailyChart', allChartData.dailyProject, '日別推移');
+                break;
+            case 'categories':
+                chartInstances.categoryPie = createSummaryChart('categoryPieChart', 'pie', allChartData.summaryCategory, '合計時間 (円グラフ)');
+                chartInstances.categoryBar = createSummaryChart('categoryBarChart', 'bar', allChartData.summaryCategory, '合計時間 (棒グラフ)');
+                chartInstances.categoryTrend = createTrendChart('categoryDailyChart', allChartData.dailyCategory, '日別推移');
+                break;
+            case 'status':
+                chartInstances.statusPie = createSummaryChart('statusPieChart', 'pie', allChartData.summaryStatus, '合計時間 (円グラフ)');
+                chartInstances.statusBar = createSummaryChart('statusBarChart', 'bar', allChartData.summaryStatus, '合計時間 (棒グラフ)');
+                chartInstances.statusTrend = createTrendChart('statusDailyChart', allChartData.dailyStatus, '日別推移');
+                break;
+            case 'speed':
+                chartInstances.speedProject = createSpeedChart('speedProjectChart', allChartData.speedProject, 'プロジェクト別 平均完了日数');
+                chartInstances.speedCategory = createSpeedChart('speedCategoryChart', allChartData.speedCategory, 'カテゴリ別 平均完了日数');
+                break;
+        }
+    }
+
+    const createTrendChart = (canvasId, inputData, title) => {
+        const ctx = document.getElementById(canvasId)?.getContext('2d');
+        if (!ctx) return null;
+
+        const chartType = document.querySelector('input[name="chartType"]:checked').value;
+        const isBar = chartType === 'bar';
+        const allDates = [...new Set(inputData.map(d => d.date))].sort();
+        const allLabels = [...new Set(inputData.map(d => d.label))].sort();
+        const dataMap = allLabels.reduce((acc, label) => ({ ...acc, [label]: {} }), {});
+        inputData.forEach(d => { if (dataMap[d.label]) dataMap[d.label][d.date] = d.value; });
+        
+        const datasets = allLabels.map((label, index) => ({
+            label: label,
+            data: allDates.map(date => dataMap[label][date] || 0),
+            backgroundColor: chartColors[index % chartColors.length],
+            borderColor: chartColors[index % chartColors.length],
+            fill: !isBar,
+            tension: 0.1
+        }));
+
+        return new Chart(ctx, {
+            type: chartType,
+            data: { labels: allDates, datasets: datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                plugins: { 
+                    legend: { position: 'top' }, 
+                    title: { display: true, text: title },
+                    tooltip: { 
+                        callbacks: { 
+                            label: c => `${c.dataset.label || ''}: ${c.parsed.y.toFixed(2)} 時間`
+                        } 
+                    } 
+                },
+                scales: {
+                    x: { type: 'time', time: { unit: 'day', tooltipFormat: 'yyyy/MM/dd' }, stacked: true, grid: { display: false } },
+                    y: { stacked: true, beginAtZero: true, title: { display: true, text: '作業時間 (h)' } }
+                }
+            }
+        });
+    };
+    
+    function updateCurrentTrendChart() {
+        switch(activeTab) {
+            case 'projects':
+                chartInstances.projectTrend?.destroy();
+                chartInstances.projectTrend = createTrendChart('projectDailyChart', allChartData.dailyProject, '日別推移');
+                break;
+            case 'categories':
+                chartInstances.categoryTrend?.destroy();
+                chartInstances.categoryTrend = createTrendChart('categoryDailyChart', allChartData.dailyCategory, '日別推移');
+                break;
+            case 'status':
+                chartInstances.statusTrend?.destroy();
+                chartInstances.statusTrend = createTrendChart('statusDailyChart', allChartData.dailyStatus, '日別推移');
+                break;
+        }
+    }
+
+    const createSummaryChart = (ctxId, type, data, title) => {
+        const ctx = document.getElementById(ctxId)?.getContext('2d');
+        if (!ctx || !data || data.length === 0) return null;
+        
+        const labels = data.map(d => d.label);
+        const values = data.map(d => d.value);
+        return new Chart(ctx, {
+            type: type,
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '作業時間 (h)', data: values, backgroundColor: getColors(labels.length),
+                    borderColor: '#fff', borderWidth: type === 'pie' ? 2 : 0
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, indexAxis: type === 'bar' ? 'y' : 'x',
+                plugins: { 
+                    legend: { display: type === 'pie', position: 'top' }, 
+                    title: { display: true, text: title } 
+                }
+            }
+        });
+    };
+
+    const createSpeedChart = (ctxId, data, title) => {
+        const ctx = document.getElementById(ctxId)?.getContext('2d');
+        if (!ctx || !data || data.length === 0) return null;
+
+        const labels = data.map(d => d.label);
+        const values = data.map(d => d.value);
+
+        return new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '平均完了日数',
+                    data: values,
+                    backgroundColor: getColors(labels.length),
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    title: { display: true, text: title },
+                    tooltip: {
+                        callbacks: {
+                            label: c => `${c.dataset.label || ''}: ${c.parsed.x.toFixed(1)} 日`
+                        }
+                    }
+                },
+                scales: {
+                    x: { beginAtZero: true, title: { display: true, text: '平均日数' } }
+                }
+            }
+        });
+    };
+
+    window.addEventListener('load', () => {
+        renderChartsForTab('projects');
+        renderedTabs['projects'] = true;
+    });
+</script>
+</body>
+</html>

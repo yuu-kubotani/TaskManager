@@ -1,12 +1,12 @@
-﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormEventToTimeLog : Form
     {
@@ -52,6 +52,7 @@ namespace TaskManager.Forms
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false; this.MinimizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             this.Controls.Add(new Label { Text = "開始:", Location = new Point(20, 20), AutoSize = true });
             dtpStart = new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "yyyy/MM/dd HH:mm", Location = new Point(80, 18), Width = 250 };

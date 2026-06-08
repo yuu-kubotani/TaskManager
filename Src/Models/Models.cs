@@ -1,7 +1,7 @@
-﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 
-namespace TaskManager.Models
+namespace UniConsul.Models
 {
     public enum TimeDisplayMode
     {
@@ -147,5 +147,24 @@ namespace TaskManager.Models
         public DateTime NotifyDate { get; set; }
         public DateTime DueDate { get; set; }
         public object ItemObject { get; set; }
+    }
+
+    public class ReportSummaryRecord
+    {
+        public string YearMonth { get; set; }
+        public string ProjectID { get; set; }
+        public string ProjectName { get; set; }
+        public string Category { get; set; }
+        public double TotalHours { get; set; }
+        public double AverageSpeedDays { get; set; }
+        public int TaskCount { get; set; }
+    }
+
+    public class PcMetricsLog
+    {
+        public string Timestamp { get; set; }
+        public int AppSwitchCount { get; set; }
+        public double CpuLoadPercent { get; set; }
+        public double MemoryLoadPercent { get; set; }
     }
 }

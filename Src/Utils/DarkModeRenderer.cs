@@ -1,7 +1,7 @@
 ﻿using System.Drawing;
 using System.Windows.Forms;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class DarkModeColorTable : ProfessionalColorTable
     {

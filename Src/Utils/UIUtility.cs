@@ -1,10 +1,10 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Threading.Tasks;
-using TaskManager.Native;
+using UniConsul.Native;
 
-namespace TaskManager.Utils
+namespace UniConsul.Utils
 {
     public static class UIUtility
     {

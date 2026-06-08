@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormTemplateEditor : Form
     {
@@ -65,6 +65,7 @@ namespace TaskManager.Forms
             this.FormBorderStyle = FormBorderStyle.Sizable; // ユーザーが自由にサイズ変更できるようにする
             this.MaximizeBox = true;
             this.MinimizeBox = true;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             _mainSplitContainer = new SplitContainer
             {
@@ -88,6 +89,9 @@ namespace TaskManager.Forms
 
             _listTemplates = new ListBox { Dock = DockStyle.Fill, IntegralHeight = false, Font = new Font("Meiryo UI", 10) };
             _listTemplates.SelectedIndexChanged += ListTemplates_SelectedIndexChanged;
+            _listTemplates.KeyDown += (s, e) => {
+                if (e.KeyCode == Keys.Delete) BtnDeleteTemplate_Click(s, e);
+            };
 
             pnlTempInner.Controls.Add(_listTemplates);
             pnlTempInner.Controls.Add(pnlTempBtn);
@@ -130,6 +134,9 @@ namespace TaskManager.Forms
             _listTasks.DrawSubItem += (s, e) => e.DrawDefault = true;
             _listTasks.DoubleClick += BtnEditTask_Click;
             _listTasks.SelectedIndexChanged += ListTasks_SelectedIndexChanged;
+            _listTasks.KeyDown += (s, e) => {
+                if (e.KeyCode == Keys.Delete) BtnDeleteTask_Click(s, e);
+            };
 
             pnlTaskInner.Controls.Add(_listTasks);
             pnlTaskInner.Controls.Add(pnlTaskBtn);

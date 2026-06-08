@@ -1,6 +1,6 @@
-﻿﻿using System.Collections.Generic;
+﻿﻿﻿using System.Collections.Generic;
 
-namespace TaskManager.Models
+namespace UniConsul.Models
 {
     public class AppSettings
     {
@@ -46,12 +46,13 @@ namespace TaskManager.Models
             EventNotificationMinutes = 15;
             EnableEventOverlapWarning = true;
             EnableColorVisionSupport = false;
-            WindowWidth = 1280;
+            WindowWidth = 1440;
             WindowHeight = 1024;
             MainSplitterDistance = 600;
-            CalendarSplitterDistance = 840;
-            CalendarLeftSplitterDistance = 400;
+            CalendarSplitterDistance = 400;
+            CalendarLeftSplitterDistance = 350;
             FilesSplitterDistance = 380;
+            TimelineSplitterRatio = 0.5f;
             RememberWindowSize = true;
             WindowSizes = new Dictionary<string, string>();
             TimeDisplayMode = TimeDisplayMode.Simple;
@@ -67,6 +68,8 @@ namespace TaskManager.Models
             UnknownCriticalPercent = 30;
             UnknownWarningPercent = 10;
             ZeroDayTaskCount = 5;
+            AutoTracker = new AutoTrackerSettings();
+            ExcludePendingTime = false;
         }
 
         public bool RunAtStartup { get; set; }
@@ -123,6 +126,7 @@ namespace TaskManager.Models
         public int CalendarSplitterDistance { get; set; }
         public int CalendarLeftSplitterDistance { get; set; }
         public int FilesSplitterDistance { get; set; }
+        public float TimelineSplitterRatio { get; set; }
         public Dictionary<string, string> WindowSizes { get; set; }
         public TimeDisplayMode TimeDisplayMode { get; set; }
 
@@ -137,5 +141,10 @@ namespace TaskManager.Models
         public int UnknownCriticalPercent { get; set; }
         public int UnknownWarningPercent { get; set; }
         public int ZeroDayTaskCount { get; set; }
+
+        // --- 自動記録・シャドウトラッカー機能の設定 ---
+        public AutoTrackerSettings AutoTracker { get; set; }
+
+        public bool ExcludePendingTime { get; set; }
     }
 }

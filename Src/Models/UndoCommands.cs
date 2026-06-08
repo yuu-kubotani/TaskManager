@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace TaskManager.Models
+namespace UniConsul.Models
 {
     public interface IUndoCommand
     {

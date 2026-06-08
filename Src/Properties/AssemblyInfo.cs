@@ -1,4 +1,4 @@
-using System.Reflection; 
+﻿using System.Reflection; 
 using System.Runtime.InteropServices; 
 [assembly: AssemblyTitle("TaskManager")] 
 [assembly: AssemblyDescription("Task Management Application")] 

@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
-using TaskManager.Services;
+using UniConsul.Services;
+using System.Security.Cryptography;
+using System.Text;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormLogin : Form
     {
@@ -39,6 +41,7 @@ namespace TaskManager.Forms
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.TopMost = true;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var lbl = new Label { Text = "パスコードを入力してください:", Location = new Point(10, 15), AutoSize = true };
             this.Controls.Add(lbl);
@@ -60,9 +63,21 @@ namespace TaskManager.Forms
             this.Shown += (s, e) => txtPasscode.Focus();
         }
 
+        private static string ComputeHash(string input)
+        {
+            using (var sha256 = SHA256.Create())
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(input);
+                byte[] hash = sha256.ComputeHash(bytes);
+                return Convert.ToBase64String(hash);
+            }
+        }
+
         private void BtnOk_Click(object sender, EventArgs e)
         {
-            if (txtPasscode.Text == _correctPasscode)
+            string inputHash = ComputeHash(txtPasscode.Text);
+            // 新しいハッシュ化されたパスコード、または旧バージョンの平文パスコードと一致するか確認
+            if (inputHash == _correctPasscode || txtPasscode.Text == _correctPasscode)
             {
                 this.DialogResult = DialogResult.OK;
                 this.Close();

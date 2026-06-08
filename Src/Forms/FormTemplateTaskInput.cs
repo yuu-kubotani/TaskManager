@@ -1,12 +1,12 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormTemplateTaskInput : Form
     {
@@ -56,6 +56,7 @@ namespace TaskManager.Forms
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var lblTask = new Label { Text = "タスク内容：", Location = new Point(15, 15), AutoSize = true };
             _txtTask = new TextBox { Multiline = true, Location = new Point(15, 35), Size = new Size(300, 60), AcceptsReturn = true };

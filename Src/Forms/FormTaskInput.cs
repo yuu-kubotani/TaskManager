@@ -1,13 +1,14 @@
-﻿﻿﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
-using TaskManager.Utils;
+using UniConsul.Models;
+using UniConsul.Services;
+using UniConsul.Utils;
+using System.IO;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormTaskInput : Form
     {
@@ -39,6 +40,10 @@ namespace TaskManager.Forms
         private ComboBox comboCategory;
         private ComboBox comboSubCategory;
         private NumericUpDown numTargetHours;
+        private CheckBox chkEnableTarget;
+        private Label lblTargetHint;
+        private Button btnApplyHint;
+        private List<TaskItem> _allTasks;
         private TextBox textTask;
         private Button buttonSave;
         private Button buttonCancel;
@@ -49,7 +54,8 @@ namespace TaskManager.Forms
             _projects = projects ?? new List<ProjectItem>();
             _categories = categories ?? new Dictionary<string, List<string>>();
 
-            _dataService = new DataService(AppDomain.CurrentDomain.BaseDirectory);
+            _dataService = new DataService(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TaskManager"));
+            _allTasks = _dataService.LoadTasksFromCsv(_dataService.TasksFile) ?? new List<TaskItem>();
 
             InitializeComponent();
             LoadData(projectIDForNew);
@@ -57,6 +63,36 @@ namespace TaskManager.Forms
             // 💡 ウィンドウサイズの記憶と復元を有効化
             var settings = _dataService.LoadSettings();
             ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings));
+
+            DataService.DataUpdated += DataService_DataUpdated;
+        }
+
+        private void DataService_DataUpdated(object sender, EventArgs e)
+        {
+            if (this.IsDisposed) return;
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke(new Action(() => DataService_DataUpdated(sender, e)));
+                return;
+            }
+            
+            _projects = _dataService.LoadFromJson<List<ProjectItem>>(_dataService.ProjectsFile, new List<ProjectItem>());
+            _categories = _dataService.LoadFromJson<Dictionary<string, List<string>>>(_dataService.CategoriesFile, new Dictionary<string, List<string>>());
+            _allTasks = _dataService.LoadTasksFromCsv(_dataService.TasksFile) ?? new List<TaskItem>();
+
+            object selProj = comboProject.SelectedItem;
+            comboProject.Items.Clear();
+            foreach (var proj in _projects.OrderBy(p => p.ProjectName)) comboProject.Items.Add(proj);
+            if (selProj != null) {
+                var p = selProj as ProjectItem;
+                var match = _projects.FirstOrDefault(x => x.ProjectID == p.ProjectID);
+                if (match != null) comboProject.SelectedItem = match;
+            }
+
+            object selCat = comboCategory.SelectedItem;
+            comboCategory.Items.Clear();
+            comboCategory.Items.AddRange(_categories.Keys.ToArray());
+            if (selCat != null && _categories.ContainsKey(selCat.ToString())) comboCategory.SelectedItem = selCat;
         }
 
         private void InitializeComponent()
@@ -67,6 +103,7 @@ namespace TaskManager.Forms
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             // --- プロジェクト ---
             var labelProject = new Label { Text = "プロジェクト：", Location = new Point(15, 15), AutoSize = true };
@@ -80,6 +117,7 @@ namespace TaskManager.Forms
                 DisplayMember = "ProjectName",
                 ValueMember = "ProjectID"
             };
+            comboProject.SelectedIndexChanged += (s, e) => SuggestTargetTime();
             this.Controls.Add(comboProject);
 
             // --- 期日 ---
@@ -160,19 +198,28 @@ namespace TaskManager.Forms
             this.Controls.Add(comboSubCategory);
 
             // --- 目標時間 ---
-            var labelTargetHours = new Label { Text = "目標時間 (h)：", Location = new Point(15, 255), AutoSize = true };
-            this.Controls.Add(labelTargetHours);
+            chkEnableTarget = new CheckBox { Text = "目標時間 (h) を設定する", Location = new Point(15, 253), AutoSize = true };
+            chkEnableTarget.CheckedChanged += (s, e) => { numTargetHours.Enabled = chkEnableTarget.Checked; };
+            this.Controls.Add(chkEnableTarget);
 
             numTargetHours = new NumericUpDown
             {
                 Location = new Point(15, 275),
-                Width = 180,
+                Width = 80,
                 DecimalPlaces = 1,
                 Increment = 0.5m,
                 Maximum = 9999m,
-                Minimum = 0m
+                Minimum = 0m,
+                Enabled = false
             };
             this.Controls.Add(numTargetHours);
+
+            lblTargetHint = new Label { Text = "", Location = new Point(105, 278), AutoSize = true, ForeColor = Color.Gray };
+            this.Controls.Add(lblTargetHint);
+
+            btnApplyHint = new Button { Text = "適用", Location = new Point(200, 274), Size = new Size(50, 24), Visible = false };
+            btnApplyHint.Click += btnApplyHint_Click;
+            this.Controls.Add(btnApplyHint);
 
             // --- タスク内容 ---
             var labelTask = new Label { Text = "タスク内容：", Location = new Point(15, 315), AutoSize = true };
@@ -243,6 +290,12 @@ namespace TaskManager.Forms
             this.CancelButton = buttonCancel;
             this.ActiveControl = textTask;
         }
+        
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            DataService.DataUpdated -= DataService_DataUpdated;
+            base.OnFormClosed(e);
+        }
 
         protected override void OnLoad(EventArgs e)
         {
@@ -305,10 +358,12 @@ namespace TaskManager.Forms
 
                 if (_existingTask.TargetHours.HasValue)
                 {
+                    chkEnableTarget.Checked = true;
                     numTargetHours.Value = (decimal)_existingTask.TargetHours.Value;
                 }
                 else
                 {
+                    chkEnableTarget.Checked = false;
                     numTargetHours.Value = 0m;
                 }
 
@@ -360,6 +415,88 @@ namespace TaskManager.Forms
             {
                 comboSubCategory.Items.AddRange(_categories[selectedCat].ToArray());
             }
+            SuggestTargetTime();
+        }
+
+        private void SuggestTargetTime()
+        {
+            if (comboCategory.SelectedItem == null || string.IsNullOrWhiteSpace(comboCategory.SelectedItem.ToString()))
+            {
+                lblTargetHint.Text = "";
+                lblTargetHint.Tag = null;
+                btnApplyHint.Visible = false;
+                return;
+            }
+
+            string selectedCategory = comboCategory.SelectedItem.ToString();
+            string currentProjectId = "";
+
+            var selectedProj = comboProject.SelectedItem as ProjectItem;
+            if (selectedProj != null)
+            {
+                currentProjectId = selectedProj.ProjectID;
+            }
+
+            var baseValidTasks = _allTasks.Where(t => t.進捗度 == "完了済み" && t.TrackedTimeSeconds > 0);
+
+            var firstPriorityTasks = baseValidTasks.Where(t => t.ProjectID == currentProjectId && t.カテゴリ == selectedCategory).ToList();
+
+            double averageSeconds = 0;
+
+            if (firstPriorityTasks.Any())
+            {
+                averageSeconds = firstPriorityTasks.Average(t => t.TrackedTimeSeconds);
+            }
+            else
+            {
+                var secondPriorityTasks = baseValidTasks.Where(t => t.カテゴリ == selectedCategory).ToList();
+                if (secondPriorityTasks.Any())
+                {
+                    averageSeconds = secondPriorityTasks.Average(t => t.TrackedTimeSeconds);
+                }
+            }
+
+            if (averageSeconds > 0)
+            {
+                double averageHours = averageSeconds / 3600.0;
+                decimal targetHours = Math.Round((decimal)averageHours, 1);
+
+                lblTargetHint.Text = string.Format("💡 平均 {0:F1}h", targetHours);
+                lblTargetHint.Tag = targetHours;
+                btnApplyHint.Visible = true;
+
+                bool isEditMode = _existingTask != null;
+
+                if (!isEditMode && !chkEnableTarget.Checked)
+                {
+                    chkEnableTarget.Checked = true;
+                    
+                    if (targetHours < numTargetHours.Minimum) targetHours = numTargetHours.Minimum;
+                    if (targetHours > numTargetHours.Maximum) targetHours = numTargetHours.Maximum;
+
+                    numTargetHours.Value = targetHours;
+                }
+            }
+            else
+            {
+                lblTargetHint.Text = "";
+                lblTargetHint.Tag = null;
+                btnApplyHint.Visible = false;
+            }
+        }
+
+        private void btnApplyHint_Click(object sender, EventArgs e)
+        {
+            decimal targetHours;
+            if (lblTargetHint.Tag != null && decimal.TryParse(lblTargetHint.Tag.ToString(), out targetHours))
+            {
+                chkEnableTarget.Checked = true;
+                
+                if (targetHours < numTargetHours.Minimum) targetHours = numTargetHours.Minimum;
+                if (targetHours > numTargetHours.Maximum) targetHours = numTargetHours.Maximum;
+
+                numTargetHours.Value = targetHours;
+            }
         }
 
         private async void ButtonSave_Click(object sender, EventArgs e)
@@ -390,7 +527,7 @@ namespace TaskManager.Forms
             ResultTask.通知設定 = comboNotify.SelectedItem != null ? comboNotify.SelectedItem.ToString() : null;
             ResultTask.カテゴリ = !string.IsNullOrWhiteSpace(comboCategory.Text) ? comboCategory.Text.Trim() : null;
             ResultTask.サブカテゴリ = !string.IsNullOrWhiteSpace(comboSubCategory.Text) ? comboSubCategory.Text.Trim() : "";
-            ResultTask.TargetHours = numTargetHours.Value > 0 ? (double?)numTargetHours.Value : null;
+            ResultTask.TargetHours = chkEnableTarget.Checked && numTargetHours.Value > 0 ? (double?)numTargetHours.Value : null;
 
             // プロジェクトIDの解決ロジック（自由入力による新規プロジェクト作成）
             var selectedProj = comboProject.SelectedItem as ProjectItem;

@@ -1,10 +1,10 @@
-﻿﻿﻿﻿﻿﻿﻿using System;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Utils;
+using UniConsul.Models;
+using UniConsul.Utils;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormProjectInput : Form
     {
@@ -33,6 +33,7 @@ namespace TaskManager.Forms
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var lblName = new Label { Text = "プロジェクト名:", Location = new Point(15, 15), AutoSize = true };
             _txtName = new TextBox { Location = new Point(15, 35), Size = new Size(400, 25), Text = _project.ProjectName };

@@ -1,13 +1,16 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
-using TaskManager.Models;
-using System.Web.Script.Serialization;
-using TaskManager.Services;
+using UniConsul.Models;
+using System.Text.Json;
+using UniConsul.Services;
 using System.Linq;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormSettings : Form
     {
@@ -21,10 +24,30 @@ namespace TaskManager.Forms
         private AppSettings _settings;
         public AppSettings ResultSettings { get; private set; }
 
+        private Dictionary<string, NumericUpDown> weightInputs = new Dictionary<string, NumericUpDown>();
+        private Dictionary<string, int> defaultWeights = new Dictionary<string, int> { { "足切りライン", 30 }, { "ファイルパス合致", 40 }, { "学習辞書合致", 30 }, { "完全一致", 30 }, { "カテゴリ辞書合致", 25 }, { "単語包含(複数)", 20 }, { "専用ソフト一致", 20 }, { "直前タスクの継続", 20 }, { "単語包含(単一)", 10 }, { "期限超過", 10 }, { "時間帯のパターン", 5 }, { "汎用ソフト一致", 5 }, { "本日が期日", 5 }, { "優先度「高」", 5 } };
+        private Dictionary<string, string> weightTooltips = new Dictionary<string, string> {
+            { "足切りライン", "タスクとして確定させるために必要な、最低限の合計ポイントです" },
+            { "ファイルパス合致", "ブラウザのURLや、開いているファイルのフォルダパス(場所)にタスク名が含まれているかをチェックします" },
+            { "学習辞書合致", "設定した「タスクの紐付け(学習辞書)」のルールと一致した場合に加点します" },
+            { "完全一致", "ウィンドウのタイトルの中に、タスク名がそっくりそのまま含まれている場合に加点します" },
+            { "カテゴリ辞書合致", "設定した「カテゴリの紐付け(学習辞書)」のルールと一致した場合に加点します" },
+            { "単語包含(複数)", "タスク名を単語に区切り、その単語がタイトルやファイルパスに2つ以上含まれている場合です" },
+            { "専用ソフト一致", "タスクのカテゴリ名がアプリ名と同じ場合、またはIllustrator等の専用ソフト使用中の場合です" },
+            { "直前タスクの継続", "過去15分以内に記録されていた直前のタスクと同じ場合、作業が続いているとみなします" },
+            { "単語包含(単一)", "タスク名の単語がタイトルやファイルパスに1つだけ含まれている場合です" },
+            { "期限超過", "すでに期日を過ぎてしまっているタスクを優先的に紐付けます" },
+            { "時間帯のパターン", "過去14日間のデータから、今の時間帯によく実行されているタスクを優先します" },
+            { "汎用ソフト一致", "ExcelやChromeなど、一般的なソフトを使用している場合に少しだけ加点します" },
+            { "本日が期日", "今日が期日のタスクを優先的に紐付けます" },
+            { "優先度「高」", "優先度が「高」に設定されているタスクを優先的に紐付けます" }
+        };
+
         private TabControl tabControl;
         private ToolTip _mainToolTip;
         
         // General
+        private CheckBox chkAutoTracking;
         private CheckBox chkRunAtStartup, chkMinimizeToTray, chkAlwaysOnTop, chkEnableSoundEffects;
         private TextBox txtPasscode;
         private TrackBar tbOpacity;
@@ -50,12 +73,19 @@ namespace TaskManager.Forms
         private NumericUpDown numAutoArchive, numWarnPercent, numPomodoro, numRetention, numProjArchive;
         private CheckBox chkArchiveOnProjComp, chkArchiveOnTaskComp;
         private CheckedListBox clbExcludeStatuses;
+        private CheckBox chkExcludePendingTime;
 
-        public FormSettings(AppSettings currentSettings)
+        private List<TaskItem> _allTasks;
+        private List<ProjectItem> _projects;
+        
+
+        public FormSettings(AppSettings currentSettings, List<TaskItem> allTasks = null, List<ProjectItem> projects = null)
         {
             // ディープコピーしてキャンセル時に元の設定を汚さないようにする
-            var serializer = new JavaScriptSerializer();
-            _settings = serializer.Deserialize<AppSettings>(serializer.Serialize(currentSettings));
+            string json = JsonSerializer.Serialize(currentSettings);
+            _settings = JsonSerializer.Deserialize<AppSettings>(json);
+            _allTasks = allTasks ?? new List<TaskItem>();
+            _projects = projects ?? new List<ProjectItem>();
             InitializeComponent();
             LoadData();
 
@@ -92,9 +122,10 @@ namespace TaskManager.Forms
         private void InitializeComponent()
         {
             this.Text = "全体設定";
-            this.Size = new Size(620, 850);
+            this.Size = new Size(860, 850);
             this.StartPosition = FormStartPosition.CenterParent;
-            this.MinimumSize = new Size(620, 850);
+            this.MinimumSize = new Size(860, 850);
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             // --- Top Panel ---
             var topPanel = new Panel     { Dock = DockStyle.Top, Height = 45 };
@@ -108,12 +139,10 @@ namespace TaskManager.Forms
 
             // --- Bottom Panel ---
             var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 50 };
-            var btnBackupSave = new Button { Text = "設定の保存...", Location = new Point(15, 10), Size = new Size(110, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Left };
-            btnBackupSave.Click += BtnBackupSave_Click;
-            var btnCancel = new Button { Text = "キャンセル", Location = new Point(450, 10), Size = new Size(90, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Right, DialogResult = DialogResult.Cancel };
-            var btnSave = new Button { Text = "設定を反映して閉じる", Location = new Point(310, 10), Size = new Size(130, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
+            var btnCancel = new Button { Text = "キャンセル", Location = new Point(730, 10), Size = new Size(90, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Right, DialogResult = DialogResult.Cancel };
+            var btnSave = new Button { Text = "設定を反映して閉じる", Location = new Point(570, 10), Size = new Size(150, 30), Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
             btnSave.Click += ButtonSave_Click;
-            bottomPanel.Controls.AddRange(new Control[] { btnBackupSave, btnSave, btnCancel });
+            bottomPanel.Controls.AddRange(new Control[] { btnSave, btnCancel });
             this.Controls.Add(bottomPanel);
             
             // --- Tab Control ---
@@ -134,6 +163,9 @@ namespace TaskManager.Forms
             var tabGeneral = new TabPage("一般・動作");
             tabControl.TabPages.Add(tabGeneral);
             int y = 15;
+            chkAutoTracking = new CheckBox { Text = "自動記録を有効にする", AutoSize = true };
+            AddField(tabGeneral, ref y, null, chkAutoTracking);
+
             chkRunAtStartup = new CheckBox { Text = "Windows起動時に自動実行する", AutoSize = true };
             AddField(tabGeneral, ref y, null, chkRunAtStartup);
             chkMinimizeToTray = new CheckBox { Text = "閉じるボタンで最小化 (タスクトレイへ)", AutoSize = true };
@@ -259,6 +291,9 @@ namespace TaskManager.Forms
             chkArchiveOnTaskComp = new CheckBox { Text = "タスク完了時に即時アーカイブ", AutoSize = true };
             AddField(tabData, ref y, null, chkArchiveOnTaskComp);
 
+            chkExcludePendingTime = new CheckBox { Text = "進捗スピードの計算から保留・承認待ち時間を除外する", AutoSize = true };
+            AddField(tabData, ref y, null, chkExcludePendingTime);
+
             clbExcludeStatuses = new CheckedListBox { Width = 350, Height = 80, CheckOnClick = true };
             var statuses = new[] { "未実施", "保留", "実施中", "確認待ち", "完了済み" };
             clbExcludeStatuses.Items.AddRange(statuses);
@@ -280,12 +315,12 @@ namespace TaskManager.Forms
             chkRememberWindowSize = new CheckBox { Text = "終了時のウィンドウサイズと分割位置を記憶する", AutoSize = true };
             btnResetWindowSize = new Button { Text = "初期値に戻す", Width = 100, Height = 25 };
             btnResetWindowSize.Click += (s, e) => {
-                numWindowWidth.Value = 1280;
+                numWindowWidth.Value = 1440;
                 numWindowHeight.Value = 1024;
                 numMainSplitter.Value = 600;
                 numFilesSplitter.Value = 380;
-                numCalendarSplitter.Value = 840;
-                numCalendarLeftSplitter.Value = 400;
+                numCalendarSplitter.Value = 400;
+                numCalendarLeftSplitter.Value = 350;
                 
                 if (subWindowSizeControls.ContainsKey("FormTaskInput")) { subWindowSizeControls["FormTaskInput"][0].Value = 450; subWindowSizeControls["FormTaskInput"][1].Value = 650; }
                 if (subWindowSizeControls.ContainsKey("FormProjectInput")) { subWindowSizeControls["FormProjectInput"][0].Value = 350; subWindowSizeControls["FormProjectInput"][1].Value = 230; }
@@ -294,7 +329,7 @@ namespace TaskManager.Forms
                 if (subWindowSizeControls.ContainsKey("FormTemplateTaskInput")) { subWindowSizeControls["FormTemplateTaskInput"][0].Value = 350; subWindowSizeControls["FormTemplateTaskInput"][1].Value = 320; }
                 if (subWindowSizeControls.ContainsKey("FormArchiveView")) { subWindowSizeControls["FormArchiveView"][0].Value = 800; subWindowSizeControls["FormArchiveView"][1].Value = 600; }
                 if (subWindowSizeControls.ContainsKey("FormReport")) { subWindowSizeControls["FormReport"][0].Value = 1200; subWindowSizeControls["FormReport"][1].Value = 850; }
-                if (subWindowSizeControls.ContainsKey("FormSettings")) { subWindowSizeControls["FormSettings"][0].Value = 620; subWindowSizeControls["FormSettings"][1].Value = 850; }
+                if (subWindowSizeControls.ContainsKey("FormSettings")) { subWindowSizeControls["FormSettings"][0].Value = 860; subWindowSizeControls["FormSettings"][1].Value = 850; }
             };
             AddField(tabLayout, ref y, null, chkRememberWindowSize, null, btnResetWindowSize);
 
@@ -327,13 +362,62 @@ namespace TaskManager.Forms
                 AddField(tabLayout, ref y, parts[1] + " (幅):", numW, "(高さ):", numH);
             }
 
-            // --- 6. Maintenance Tab ---
+            // --- 6. AutoTracker Tab ---
+            var tabAutoTracker = new TabPage("自動紐付け");
+            tabControl.TabPages.Add(tabAutoTracker);
+            
+            var flowWeights = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(15, 15, 15, 60), FlowDirection = FlowDirection.LeftToRight, WrapContents = true };
+            tabAutoTracker.Controls.Add(flowWeights);
+            
+            var pnlWeightsHeader = new FlowLayoutPanel { Width = 800, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = new Padding(0, 0, 0, 15), WrapContents = false };
+            var lblWeightsDesc = new Label { Text = "作業中の「アプリ名やウィンドウのタイトル」と「登録済みのタスク」を比較する条件を設定します。\n条件を満たしてポイントが「基準スコア」を超えたタスクに、自動記録が紐付けられます。", AutoSize = true, Font = new Font("Meiryo UI", 9, FontStyle.Bold) };
+            var btnHelp = new Button { Text = "？", Size = new Size(30, 30), Font = new Font("Meiryo UI", 10, FontStyle.Bold), Cursor = Cursors.Hand, Margin = new Padding(10, 0, 0, 0) };
+            btnHelp.Click += (s, ev) => {
+                string helpText = "【自動紐付けの仕組み】\n\n" +
+                                  "作業中の「アプリ名」や「ウィンドウのタイトル」と、登録済みの「タスク名」などを比較し、設定された条件を満たすとポイントが加算されます。\n\n" +
+                                  "最も合計ポイントが高く、かつ「基準スコア」を超えたタスクが、現在の作業として紐付けられます。\n" +
+                                  "基準スコアに満たない場合は、どのタスクにも紐付かず「未分類」として記録されます。\n\n" +
+                                  "・同点になった場合は、「直近1時間のタスク」「期日が近いタスク」「最近更新されたタスク」の順で優先されます。\n\n" +
+                                  "※ 各項目の数値を調整することで、紐付けの優先度をカスタマイズできます。";
+                MessageBox.Show(this, helpText, "自動紐付けの仕組みについて", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+            pnlWeightsHeader.Controls.AddRange(new Control[] { lblWeightsDesc, btnHelp });
+            flowWeights.Controls.Add(pnlWeightsHeader);
+
+            foreach (var kvp in defaultWeights)
+            {
+                string displayLabel = kvp.Key;
+                switch (kvp.Key) { case "足切りライン": displayLabel = "👉 紐付けの基準スコア (この点数未満は未分類になります)"; break; case "ファイルパス合致": displayLabel = "ファイルパスや URL に「タスク名」が含まれている"; break; case "学習辞書合致": displayLabel = "「タスクの紐付け(学習辞書)」のルールと一致する"; break; case "完全一致": displayLabel = "ウィンドウのタイトルに「タスク名」が完全に含まれる"; break; case "カテゴリ辞書合致": displayLabel = "「カテゴリの紐付け(学習辞書)」のルールと一致する"; break; case "単語包含(複数)": displayLabel = "タイトル等に「タスク名」の単語が 2つ以上 含まれる"; break; case "専用ソフト一致": displayLabel = "タスクのカテゴリ名とアプリ名が一致 (または専用ソフト使用中)"; break; case "直前タスクの継続": displayLabel = "直前 (過去15分以内) に実行していたタスクと同じである"; break; case "単語包含(単一)": displayLabel = "タイトル等に「タスク名」の単語が 1つだけ 含まれる"; break; case "期限超過": displayLabel = "すでに期日を過ぎているタスクである"; break; case "時間帯のパターン": displayLabel = "過去のデータから、この時間帯によく実行するタスクである"; break; case "汎用ソフト一致": displayLabel = "一般的なソフト (Excel, Chrome等) を使用中である"; break; case "本日が期日": displayLabel = "今日が期日のタスクである"; break; case "優先度「高」": displayLabel = "優先度が「高」に設定されているタスクである"; break; }
+
+                var pnl = new Panel { Width = 375, Height = 48, Margin = new Padding(5) };
+                var lblTag = new Label { 
+                    Text = displayLabel, Location = new Point(5, 5), AutoSize = true, MaximumSize = new Size(295, 0), Padding = new Padding(5, 3, 5, 3), Font = new Font("Meiryo UI", 9, kvp.Key == "足切りライン" ? FontStyle.Bold : FontStyle.Regular)
+                };
+                if (kvp.Key == "足切りライン") lblTag.ForeColor = Color.DodgerBlue;
+                
+                var num = new NumericUpDown { Location = new Point(305, 13), Width = 60, Minimum = 0, Maximum = 200, Font = new Font("Meiryo UI", 9) };
+                
+                weightInputs[kvp.Key] = num;
+                pnl.Controls.Add(lblTag); pnl.Controls.Add(num); flowWeights.Controls.Add(pnl);
+            }
+            
+            var pnlReset = new Panel { AutoSize = true, Height = 40, Margin = new Padding(0) };
+            var btnResetWeights = new Button { Text = "デフォルトに戻す", Width = 150, Height = 28, Location = new Point(5, 10) };
+            btnResetWeights.Click += (s, ev) => { foreach (var kvp in defaultWeights) if(weightInputs.ContainsKey(kvp.Key)) weightInputs[kvp.Key].Value = kvp.Value; };
+            pnlReset.Controls.Add(btnResetWeights);
+            flowWeights.Controls.Add(pnlReset);
+
+            // --- 7. Maintenance Tab ---
             var tabMaint = new TabPage("メンテナンス");
             tabControl.TabPages.Add(tabMaint);
             y = 15;
             
             var btnOpenData = new Button { Text = "📂 データフォルダを開く", Location = new Point(15, y), Size = new Size(220, 30) };
-            btnOpenData.Click += (s, e) => { System.Diagnostics.Process.Start(AppDomain.CurrentDomain.BaseDirectory); };
+            btnOpenData.Click += (s, e) => { 
+                string appRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UniConsul");
+                var dataSvc = new DataService(appRoot);
+                System.Diagnostics.Process.Start("explorer.exe", dataSvc.AppRoot); 
+            };
             tabMaint.Controls.Add(btnOpenData);
             y += 40;
 
@@ -348,17 +432,23 @@ namespace TaskManager.Forms
             tabMaint.Controls.Add(btnResetPos);
             y += 40;
 
+            var btnBackupSave = new Button { Text = "💾 現在の設定をファイルに保存...", Location = new Point(15, y), Size = new Size(220, 30) };
+            btnBackupSave.Click += BtnBackupSave_Click;
+            tabMaint.Controls.Add(btnBackupSave);
+            y += 40;
+
             var btnResetConfig = new Button { Text = "⚠️ 設定を初期化", Location = new Point(15, y), Size = new Size(220, 30), ForeColor = Color.Red };
             btnResetConfig.Click += (s, e) => {
                 if (MessageBox.Show("すべての設定を初期化します。よろしいですか？\n(データは削除されません)", "確認", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes) {
-                    var ds = new DataService(AppDomain.CurrentDomain.BaseDirectory);
-                    if (System.IO.File.Exists(ds.SettingsFile)) System.IO.File.Delete(ds.SettingsFile);
+                    string appRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UniConsul");
+                    var dataSvc = new DataService(appRoot);
+                    if (System.IO.File.Exists(dataSvc.SettingsFile)) System.IO.File.Delete(dataSvc.SettingsFile);
                     MessageBox.Show("設定を初期化しました。アプリを再起動してください。", "完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     Application.Exit();
                 }
             };
             tabMaint.Controls.Add(btnResetConfig);
-            
+
             SetupToolTips();
         }
 
@@ -391,6 +481,16 @@ namespace TaskManager.Forms
             chkShowTooltips.CheckedChanged += (s, e) => {
                 _mainToolTip.Active = chkShowTooltips.Checked;
             };
+            
+            foreach (var kvp in weightInputs) {
+                if (weightTooltips.ContainsKey(kvp.Key)) {
+                    _mainToolTip.SetToolTip(kvp.Value, weightTooltips[kvp.Key]);
+                    _mainToolTip.SetToolTip(kvp.Value.Parent, weightTooltips[kvp.Key]);
+                    foreach (Control c in kvp.Value.Parent.Controls) {
+                        _mainToolTip.SetToolTip(c, weightTooltips[kvp.Key]);
+                    }
+                }
+            }
         }
 
         private void TabControl_DrawItem(object sender, DrawItemEventArgs e)
@@ -437,22 +537,26 @@ namespace TaskManager.Forms
 
         private void LoadData()
         {
+            try { chkAutoTracking.Checked = _settings.AutoTracker != null ? _settings.AutoTracker.EnableAutoTracking : false; } catch {}
             try { chkRunAtStartup.Checked = _settings.RunAtStartup; } catch {}
             try { chkMinimizeToTray.Checked = _settings.MinimizeToTray; } catch {}
             try { chkAlwaysOnTop.Checked = _settings.AlwaysOnTop; } catch {}
             try { chkEnableSoundEffects.Checked = _settings.EnableSoundEffects; } catch {}
-            try { txtPasscode.Text = _settings.Passcode; } catch {}
+            try { 
+                if (!string.IsNullOrEmpty(_settings.Passcode)) txtPasscode.Text = "********";
+                else txtPasscode.Text = "";
+            } catch {}
             try { tbOpacity.Value = Math.Max(5, Math.Min(10, (int)(_settings.WindowOpacity * 10))); } catch { tbOpacity.Value = 10; }
             try { numIdleTimeout.Value = Math.Max(1, _settings.IdleTimeoutMinutes); } catch { numIdleTimeout.Value = 5; }
             try { numLongTask.Value = _settings.LongTaskNotificationMinutes; } catch { numLongTask.Value = 180; }
 
             try { chkRememberWindowSize.Checked = _settings.RememberWindowSize; } catch { chkRememberWindowSize.Checked = true; }
-            try { numWindowWidth.Value = Math.Max(800, _settings.WindowWidth); } catch { numWindowWidth.Value = 1280; }
+            try { numWindowWidth.Value = Math.Max(800, _settings.WindowWidth); } catch { numWindowWidth.Value = 1440; }
             try { numWindowHeight.Value = Math.Max(600, _settings.WindowHeight); } catch { numWindowHeight.Value = 1024; }
             try { numMainSplitter.Value = Math.Max(100, _settings.MainSplitterDistance); } catch { numMainSplitter.Value = 600; }
             try { numFilesSplitter.Value = Math.Max(100, _settings.FilesSplitterDistance); } catch { numFilesSplitter.Value = 380; }
-            try { numCalendarSplitter.Value = Math.Max(100, _settings.CalendarSplitterDistance); } catch { numCalendarSplitter.Value = 840; }
-            try { numCalendarLeftSplitter.Value = Math.Max(100, _settings.CalendarLeftSplitterDistance); } catch { numCalendarLeftSplitter.Value = 400; }
+            try { numCalendarSplitter.Value = Math.Max(100, _settings.CalendarSplitterDistance); } catch { numCalendarSplitter.Value = 400; }
+            try { numCalendarLeftSplitter.Value = Math.Max(100, _settings.CalendarLeftSplitterDistance); } catch { numCalendarLeftSplitter.Value = 350; }
 
             if (_settings.WindowSizes != null) {
                 foreach (var key in subWindowSizeControls.Keys) {
@@ -470,7 +574,7 @@ namespace TaskManager.Forms
                         if (key == "FormTemplateTaskInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 320; }
                         if (key == "FormArchiveView") { subWindowSizeControls[key][0].Value = 800; subWindowSizeControls[key][1].Value = 600; }
                         if (key == "FormReport") { subWindowSizeControls[key][0].Value = 1200; subWindowSizeControls[key][1].Value = 850; }
-                        if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 620; subWindowSizeControls[key][1].Value = 850; }
+                        if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 860; subWindowSizeControls[key][1].Value = 850; }
                     }
                 }
             } else {
@@ -482,7 +586,19 @@ namespace TaskManager.Forms
                     if (key == "FormTemplateTaskInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 320; }
                     if (key == "FormArchiveView") { subWindowSizeControls[key][0].Value = 800; subWindowSizeControls[key][1].Value = 600; }
                     if (key == "FormReport") { subWindowSizeControls[key][0].Value = 1200; subWindowSizeControls[key][1].Value = 850; }
-                    if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 620; subWindowSizeControls[key][1].Value = 850; }
+                    if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 860; subWindowSizeControls[key][1].Value = 850; }
+                }
+            }
+
+            if (_settings.AutoTracker != null && _settings.AutoTracker.InferenceWeights != null) {
+                foreach (var kvp in defaultWeights) {
+                    if (weightInputs.ContainsKey(kvp.Key)) {
+                        weightInputs[kvp.Key].Value = _settings.AutoTracker.InferenceWeights.ContainsKey(kvp.Key) ? _settings.AutoTracker.InferenceWeights[kvp.Key] : kvp.Value;
+                    }
+                }
+            } else {
+                foreach (var kvp in defaultWeights) {
+                    if (weightInputs.ContainsKey(kvp.Key)) weightInputs[kvp.Key].Value = kvp.Value;
                 }
             }
 
@@ -522,6 +638,7 @@ namespace TaskManager.Forms
             try { numProjArchive.Value = _settings.AutoArchiveProjectsDays; } catch { numProjArchive.Value = 60; }
             try { chkArchiveOnProjComp.Checked = _settings.ArchiveTasksOnProjectCompletion; } catch {}
             try { chkArchiveOnTaskComp.Checked = _settings.ArchiveTasksOnCompletion; } catch {}
+            try { chkExcludePendingTime.Checked = _settings.ExcludePendingTime; } catch {}
             
             try { 
                 if (_settings.LeadTimeExcludeStatuses != null) {
@@ -536,13 +653,32 @@ namespace TaskManager.Forms
             if (_mainToolTip != null) _mainToolTip.Active = chkShowTooltips.Checked;
         }
 
+        private static string ComputeHash(string input)
+        {
+            using (var sha256 = SHA256.Create())
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(input);
+                byte[] hash = sha256.ComputeHash(bytes);
+                return Convert.ToBase64String(hash);
+            }
+        }
+
         private void UpdateSettingsFromUI()
         {
+            try {
+                if (_settings.AutoTracker == null) _settings.AutoTracker = new AutoTrackerSettings();
+                _settings.AutoTracker.EnableAutoTracking = chkAutoTracking.Checked;
+            } catch {}
             try { _settings.RunAtStartup = chkRunAtStartup.Checked; } catch {}
             try { _settings.MinimizeToTray = chkMinimizeToTray.Checked; } catch {}
             try { _settings.AlwaysOnTop = chkAlwaysOnTop.Checked; } catch {}
             try { _settings.EnableSoundEffects = chkEnableSoundEffects.Checked; } catch {}
-            try { _settings.Passcode = txtPasscode.Text; } catch {}
+            try { 
+                if (txtPasscode.Text != "********") {
+                    if (string.IsNullOrEmpty(txtPasscode.Text)) _settings.Passcode = "";
+                    else _settings.Passcode = ComputeHash(txtPasscode.Text);
+                }
+            } catch {}
             try { _settings.WindowOpacity = tbOpacity.Value / 10.0; } catch {}
             try { _settings.IdleTimeoutMinutes = (int)numIdleTimeout.Value; } catch {}
             try { _settings.LongTaskNotificationMinutes = (int)numLongTask.Value; } catch {}
@@ -604,11 +740,20 @@ namespace TaskManager.Forms
             try { _settings.AutoArchiveProjectsDays = (int)numProjArchive.Value; } catch {}
             try { _settings.ArchiveTasksOnProjectCompletion = chkArchiveOnProjComp.Checked; } catch {}
             try { _settings.ArchiveTasksOnCompletion = chkArchiveOnTaskComp.Checked; } catch {}
+            try { _settings.ExcludePendingTime = chkExcludePendingTime.Checked; } catch {}
             
             try {
                 var excludes = new List<string>();
                 foreach (var item in clbExcludeStatuses.CheckedItems) excludes.Add(item.ToString());
                 _settings.LeadTimeExcludeStatuses = excludes;
+            } catch {}
+
+            try {
+                if (_settings.AutoTracker == null) _settings.AutoTracker = new AutoTrackerSettings();
+                if (_settings.AutoTracker.InferenceWeights == null) _settings.AutoTracker.InferenceWeights = new Dictionary<string, int>();
+                foreach (var kvp in weightInputs) {
+                    _settings.AutoTracker.InferenceWeights[kvp.Key] = (int)kvp.Value.Value;
+                }
             } catch {}
         }
 
@@ -649,8 +794,8 @@ namespace TaskManager.Forms
                 {
                     try
                     {
-                        var serializer = new JavaScriptSerializer();
-                        System.IO.File.WriteAllText(sfd.FileName, serializer.Serialize(_settings), System.Text.Encoding.UTF8);
+                        string json = JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+                        System.IO.File.WriteAllText(sfd.FileName, json, System.Text.Encoding.UTF8);
                         MessageBox.Show("設定を保存しました。", "完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     catch (Exception ex)

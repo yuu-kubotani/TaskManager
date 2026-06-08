@@ -1,13 +1,13 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Text;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormDailyReport : Form
     {
@@ -23,7 +23,7 @@ namespace TaskManager.Forms
         private bool _isDarkMode;
 
         private DateTimePicker _dtpTargetDate;
-        private TextBox _txtReportPreview;
+        private TextBox _txtEvents, _txtCompletedTasks, _txtTotalTime, _txtCategory, _txtProject, _txtWorkDetails, _txtComments;
 
         public FormDailyReport(DataService dataService, List<TimeLog> timeLogs, List<TaskItem> tasks, List<ProjectItem> projects, Dictionary<string, List<EventItem>> events, bool isDarkMode)
         {
@@ -56,6 +56,7 @@ namespace TaskManager.Forms
             this.Size = new Size(580, 600);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.Sizable;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var topPanel = new Panel { Dock = DockStyle.Top, Height = 50, Padding = new Padding(10) };
             topPanel.Controls.Add(new Label { Text = "対象日:", Location = new Point(10, 15), AutoSize = true });
@@ -81,21 +82,48 @@ namespace TaskManager.Forms
 
             this.Controls.Add(topPanel);
 
-            _txtReportPreview = new TextBox
-            {
-                Dock = DockStyle.Fill,
-                Multiline = true,
-                ScrollBars = ScrollBars.Vertical,
-                ReadOnly = false,
-                AcceptsReturn = true,
-                Font = new Font("Meiryo UI", 10)
-            };
+            var scrollPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(10), FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            this.Controls.Add(scrollPanel);
+            scrollPanel.BringToFront(); // 💡 入力領域を一番手前に持ってくる（上部と被らないようにする）
+
+            _txtEvents = CreateSection(scrollPanel, "■ 本日のイベント:");
+            _txtCompletedTasks = CreateSection(scrollPanel, "■ 完了したタスク:");
+            _txtTotalTime = CreateSection(scrollPanel, "■ 総作業時間:");
+            _txtCategory = CreateSection(scrollPanel, "■ カテゴリ別内訳:");
+            _txtProject = CreateSection(scrollPanel, "■ プロジェクト別内訳:");
+            _txtWorkDetails = CreateSection(scrollPanel, "■ 実施した作業内容 (費やした時間):");
+            _txtComments = CreateSection(scrollPanel, "■ 所感・コメント:");
             
-            var paddingPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
-            paddingPanel.Controls.Add(_txtReportPreview);
-            this.Controls.Add(paddingPanel);
+            // リサイズ時にテキストボックスの幅を追従させる
+            scrollPanel.Resize += (s, e) => {
+                int w = scrollPanel.ClientSize.Width - 25;
+                if (w > 0) {
+                    _txtEvents.Width = w; _txtCompletedTasks.Width = w; _txtTotalTime.Width = w;
+                    _txtCategory.Width = w; _txtProject.Width = w; _txtWorkDetails.Width = w; _txtComments.Width = w;
+                }
+            };
 
             this.CancelButton = btnClose;
+        }
+
+        private TextBox CreateSection(FlowLayoutPanel parent, string title)
+        {
+            var lbl = new Label { Text = title, AutoSize = true, Font = new Font("Meiryo UI", 9, FontStyle.Bold), Margin = new Padding(0, 10, 0, 5) };
+            parent.Controls.Add(lbl);
+            
+            var txt = new TextBox { Multiline = true, Size = new Size(parent.ClientSize.Width - 25, 60), AcceptsReturn = true, Font = new Font("Meiryo UI", 9.5f), ScrollBars = ScrollBars.None };
+            txt.TextChanged += (s, e) => {
+                int padding = 10;
+                Size sz = new Size(txt.ClientSize.Width, int.MaxValue);
+                TextFormatFlags flags = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl;
+                sz = TextRenderer.MeasureText(txt.Text + "\r\n", txt.Font, sz, flags);
+                int newHeight = sz.Height + (txt.Height - txt.ClientSize.Height) + padding;
+                if (newHeight < 40) newHeight = 40;
+                if (txt.Height != newHeight) txt.Height = newHeight;
+            };
+            
+            parent.Controls.Add(txt);
+            return txt;
         }
 
         private void LoadReport()
@@ -103,9 +131,7 @@ namespace TaskManager.Forms
             string dateStr = _dtpTargetDate.Value.ToString("yyyy-MM-dd");
             if (_savedReports.ContainsKey(dateStr))
             {
-                _txtReportPreview.Text = _savedReports[dateStr];
-                _txtReportPreview.SelectionStart = 0;
-                _txtReportPreview.ScrollToCaret();
+                ParseReportText(_savedReports[dateStr]);
             }
             else
             {
@@ -113,16 +139,39 @@ namespace TaskManager.Forms
             }
         }
 
+        private void ParseReportText(string text)
+        {
+            _txtEvents.Text = ExtractSection(text, "■ 本日のイベント:", "■ 完了したタスク:");
+            _txtCompletedTasks.Text = ExtractSection(text, "■ 完了したタスク:", "■ 総作業時間:");
+            _txtTotalTime.Text = ExtractSection(text, "■ 総作業時間:", "■ カテゴリ別内訳:");
+            _txtCategory.Text = ExtractSection(text, "■ カテゴリ別内訳:", "■ プロジェクト別内訳:");
+            _txtProject.Text = ExtractSection(text, "■ プロジェクト別内訳:", "■ 実施した作業内容 (費やした時間):");
+            _txtWorkDetails.Text = ExtractSection(text, "■ 実施した作業内容 (費やした時間):", "■ 所感・コメント:");
+            _txtComments.Text = ExtractSection(text, "■ 所感・コメント:", null);
+        }
+
+        private string ExtractSection(string text, string startHeader, string endHeader)
+        {
+            int startIdx = text.IndexOf(startHeader);
+            if (startIdx == -1) return "";
+            startIdx += startHeader.Length;
+            
+            int endIdx = text.Length;
+            if (endHeader != null)
+            {
+                int tempEnd = text.IndexOf(endHeader, startIdx);
+                if (tempEnd != -1) endIdx = tempEnd;
+            }
+            
+            return text.Substring(startIdx, endIdx - startIdx).Trim(new char[] { '\r', '\n', ' ' });
+        }
+
         private void GenerateReport()
         {
             var targetDate = _dtpTargetDate.Value.Date;
             string dateStr = targetDate.ToString("yyyy-MM-dd");
             
-            var sb = new StringBuilder();
-            sb.AppendLine(string.Format("【日報】 {0:yyyy年MM月dd日}", targetDate));
-            sb.AppendLine("--------------------------------------------------");
-
-            sb.AppendLine("■ 本日のイベント:");
+            var sbEvents = new StringBuilder();
             if (_events.ContainsKey(dateStr) && _events[dateStr].Count > 0)
             {
                 foreach (var ev in _events[dateStr].OrderBy(e => e.StartTime))
@@ -136,16 +185,16 @@ namespace TaskManager.Forms
                         if (hasStart && hasEnd) timeStr = string.Format("{0:HH:mm} - {1:HH:mm}", st, et);
                         else if (hasStart) timeStr = st.ToString("HH:mm");
                     }
-                    sb.AppendLine(string.Format("  - {0} ({1})", ev.Title, timeStr));
+                    sbEvents.AppendLine(string.Format("  - {0} ({1})", ev.Title, timeStr));
                 }
             }
             else
             {
-                sb.AppendLine("  (なし)");
+                sbEvents.AppendLine("  (なし)");
             }
-            sb.AppendLine();
+            _txtEvents.Text = sbEvents.ToString().TrimEnd();
 
-            sb.AppendLine("■ 完了したタスク:");
+            var sbTasks = new StringBuilder();
             var completedTasks = _tasks.Where(t => t.進捗度 == "完了済み" && t.完了日 == dateStr).ToList();
             if (completedTasks.Count > 0)
             {
@@ -154,14 +203,14 @@ namespace TaskManager.Forms
                     string projName = "(未分類)";
                     var proj = _projects.FirstOrDefault(p => p.ProjectID == t.ProjectID);
                     if (proj != null) projName = proj.ProjectName;
-                    sb.AppendLine(string.Format("  - {0} [{1}]", t.タスク, projName));
+                    sbTasks.AppendLine(string.Format("  - {0} [{1}]", t.タスク, projName));
                 }
             }
             else
             {
-                sb.AppendLine("  (なし)");
+                sbTasks.AppendLine("  (なし)");
             }
-            sb.AppendLine();
+            _txtCompletedTasks.Text = sbTasks.ToString().TrimEnd();
 
             var dailyLogs = _timeLogs.Where(l => 
                 !string.IsNullOrEmpty(l.StartTime) && 
@@ -214,45 +263,69 @@ namespace TaskManager.Forms
             }
 
             var tsTotal = TimeSpan.FromSeconds(totalSeconds);
-            sb.AppendLine(string.Format("■ 総作業時間: {0}時間 {1}分", (int)tsTotal.TotalHours, tsTotal.Minutes));
-            sb.AppendLine();
+            _txtTotalTime.Text = string.Format("{0}時間 {1}分", (int)tsTotal.TotalHours, tsTotal.Minutes);
 
-            sb.AppendLine("■ カテゴリ別内訳:");
+            var sbCat = new StringBuilder();
             foreach (var kvp in categoryTime.OrderByDescending(x => x.Value))
             {
                 var ts = TimeSpan.FromSeconds(kvp.Value);
-                sb.AppendLine(string.Format("  - {0}: {1}h {2}m", kvp.Key, (int)ts.TotalHours, ts.Minutes));
+                sbCat.AppendLine(string.Format("  - {0}: {1}h {2}m", kvp.Key, (int)ts.TotalHours, ts.Minutes));
             }
-            sb.AppendLine();
+            _txtCategory.Text = sbCat.ToString().TrimEnd();
 
-            sb.AppendLine("■ プロジェクト別内訳:");
+            var sbProj = new StringBuilder();
             foreach (var kvp in projectTime.OrderByDescending(x => x.Value))
             {
                 var ts = TimeSpan.FromSeconds(kvp.Value);
-                sb.AppendLine(string.Format("  - {0}: {1}h {2}m", kvp.Key, (int)ts.TotalHours, ts.Minutes));
+                sbProj.AppendLine(string.Format("  - {0}: {1}h {2}m", kvp.Key, (int)ts.TotalHours, ts.Minutes));
             }
-            sb.AppendLine();
+            _txtProject.Text = sbProj.ToString().TrimEnd();
 
-            sb.AppendLine("■ 実施した作業内容 (費やした時間):");
+            var sbWork = new StringBuilder();
             foreach (var kvp in taskTime.OrderByDescending(x => x.Value))
             {
                 var ts = TimeSpan.FromSeconds(kvp.Value);
-                sb.AppendLine(string.Format("  - {0} ({1}時間 {2}分)", kvp.Key, (int)ts.TotalHours, ts.Minutes));
+                sbWork.AppendLine(string.Format("  - {0} ({1}時間 {2}分)", kvp.Key, (int)ts.TotalHours, ts.Minutes));
             }
+            _txtWorkDetails.Text = sbWork.ToString().TrimEnd();
 
+            _txtComments.Text = "";
+        }
+
+        private string BuildReportString()
+        {
+            var targetDate = _dtpTargetDate.Value.Date;
+            var sb = new StringBuilder();
+            sb.AppendLine(string.Format("【日報】 {0:yyyy年MM月dd日}", targetDate));
+            sb.AppendLine("--------------------------------------------------");
+            sb.AppendLine("■ 本日のイベント:");
+            if (!string.IsNullOrWhiteSpace(_txtEvents.Text)) sb.AppendLine(_txtEvents.Text);
+            sb.AppendLine();
+            sb.AppendLine("■ 完了したタスク:");
+            if (!string.IsNullOrWhiteSpace(_txtCompletedTasks.Text)) sb.AppendLine(_txtCompletedTasks.Text);
+            sb.AppendLine();
+            sb.AppendLine("■ 総作業時間: " + _txtTotalTime.Text.Trim());
+            sb.AppendLine();
+            sb.AppendLine("■ カテゴリ別内訳:");
+            if (!string.IsNullOrWhiteSpace(_txtCategory.Text)) sb.AppendLine(_txtCategory.Text);
+            sb.AppendLine();
+            sb.AppendLine("■ プロジェクト別内訳:");
+            if (!string.IsNullOrWhiteSpace(_txtProject.Text)) sb.AppendLine(_txtProject.Text);
+            sb.AppendLine();
+            sb.AppendLine("■ 実施した作業内容 (費やした時間):");
+            if (!string.IsNullOrWhiteSpace(_txtWorkDetails.Text)) sb.AppendLine(_txtWorkDetails.Text);
             sb.AppendLine();
             sb.AppendLine("■ 所感・コメント:");
-            sb.AppendLine();
-
-            _txtReportPreview.Text = sb.ToString();
-            _txtReportPreview.SelectionStart = 0;
-            _txtReportPreview.ScrollToCaret();
+            if (!string.IsNullOrWhiteSpace(_txtComments.Text)) sb.AppendLine(_txtComments.Text);
+            
+            return sb.ToString();
         }
+
 
         private void BtnSave_Click(object sender, EventArgs e)
         {
             string dateStr = _dtpTargetDate.Value.ToString("yyyy-MM-dd");
-            _savedReports[dateStr] = _txtReportPreview.Text;
+            _savedReports[dateStr] = BuildReportString();
             _dataService.SaveToJson(_dataService.DailyReportsFile, _savedReports);
             MessageBox.Show("日報を保存しました。", "保存完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -267,9 +340,10 @@ namespace TaskManager.Forms
 
         private void BtnCopy_Click(object sender, EventArgs e)
         {
-            if (!string.IsNullOrEmpty(_txtReportPreview.Text))
+            string reportText = BuildReportString();
+            if (!string.IsNullOrEmpty(reportText))
             {
-                Clipboard.SetText(_txtReportPreview.Text);
+                Clipboard.SetText(reportText);
                 MessageBox.Show("クリップボードにコピーしました。", "完了", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }

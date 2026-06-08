@@ -1,4 +1,4 @@
-﻿﻿﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -6,10 +6,10 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
+using UniConsul.Models;
+using UniConsul.Services;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormIcsExchange : Form
     {
@@ -37,6 +37,7 @@ namespace TaskManager.Forms
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
+            this.AutoScaleMode = AutoScaleMode.Dpi;
 
             var tabControl = new TabControl { Dock = DockStyle.Fill };
             var tabExport = new TabPage("エクスポート");
@@ -159,7 +160,7 @@ namespace TaskManager.Forms
                 content = Regex.Replace(content, "\r\n[ \t]", ""); // Unfolding
 
                 bool importAsHolidays = chkImportAsHolidays != null && chkImportAsHolidays.Checked;
-                string holidaysPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "holidays.json");
+                string holidaysPath = Path.Combine(_dataService.AppRoot, "holidays.json");
                 Dictionary<string, string> holidays = null;
                 if (importAsHolidays) {
                     holidays = _dataService.LoadFromJson<Dictionary<string, string>>(holidaysPath, new Dictionary<string, string>());

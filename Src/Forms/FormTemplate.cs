@@ -1,13 +1,13 @@
-﻿﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
-using TaskManager.Models;
-using TaskManager.Services;
-using TaskManager.Utils;
+using UniConsul.Models;
+using UniConsul.Services;
+using UniConsul.Utils;
 
-namespace TaskManager.Forms
+namespace UniConsul.Forms
 {
     public class FormTemplate : Form
     {
