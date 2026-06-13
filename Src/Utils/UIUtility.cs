@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Threading.Tasks;
@@ -26,7 +26,8 @@ namespace UniConsul.Utils
                 if (form.BackColor.R >= 100) return; // ライトモードの場合は無視
                 IntPtr hMonthCal = NativeMethods.SendMessage(dtp.Handle, NativeMethods.DTM_GETMONTHCAL, IntPtr.Zero, IntPtr.Zero);
                 if (hMonthCal != IntPtr.Zero) {
-                    NativeMethods.SetWindowTheme(hMonthCal, "", "");
+                    // カレンダーのポップアップ部分にモダンなダークテーマを強制適用
+                    NativeMethods.SetWindowTheme(hMonthCal, "DarkMode_Explorer", null);
                     int bg = ColorTranslator.ToWin32(Color.FromArgb(30, 30, 30));
                     int fg = ColorTranslator.ToWin32(Color.White);
                     NativeMethods.SendMessage(hMonthCal, NativeMethods.MCM_SETCOLOR, (IntPtr)NativeMethods.MCSC_BACKGROUND, (IntPtr)bg);

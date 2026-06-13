@@ -1,7 +1,9 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using UniConsul.Models;
+using UniConsul.Services;
+using System.IO;
 using UniConsul.Utils;
 
 namespace UniConsul.Forms
@@ -16,6 +18,7 @@ namespace UniConsul.Forms
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wp, IntPtr lp);
 
         private ProjectItem _project;
+        private DataService _dataService;
         
         private TextBox _txtName;
         private DateTimePicker _dtpDue;
@@ -28,10 +31,11 @@ namespace UniConsul.Forms
         {
             _project = project;
 
+            this.Name = "FormProjectInput";
             this.Text = "プロジェクトのプロパティ";
             this.Size = new Size(450, 420);
             this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
             this.MaximizeBox = false;
             this.AutoScaleMode = AutoScaleMode.Dpi;
 
@@ -95,6 +99,15 @@ namespace UniConsul.Forms
             this.Controls.AddRange(new Control[] { lblName, _txtName, lblDue, _dtpDue, lblNotify, _cmbNotify, lblTarget, _numTargetHours, lblColor, _pnlColor, btnColor, _chkAutoArchive, btnSave, btnCancel });
             this.AcceptButton = btnSave;
             this.CancelButton = btnCancel;
+
+            _dataService = new DataService(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "UniConsul"));
+            var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+            }
+
+            ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings));
         }
 
         protected override void OnLoad(EventArgs e)
@@ -134,9 +147,7 @@ namespace UniConsul.Forms
                 }
                 else if (c is DateTimePicker)
                 {
-                    var dtp = (DateTimePicker)c;
-                    dtp.BackColor = surfaceBg;
-                    dtp.ForeColor = fg;
+                    // WinFormsの仕様上、DateTimePickerの入力欄はOSのシステムカラーで固定されるため設定を除外
                 }
                 else if (c is Button && c.Text != "色を選択...")
                 {

@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -37,7 +37,31 @@ namespace UniConsul.Forms
 
             InitializeComponent();
             ThemeManager.ApplyTheme(this, _isDarkMode);
+            
+            // 💡 テキスト入力枠の背景色を少し明るくして可読性を上げる
+            if (_isDarkMode)
+            {
+                Color lighterDark = Color.FromArgb(45, 45, 48);
+                _txtEvents.BackColor = lighterDark;
+                _txtCompletedTasks.BackColor = lighterDark;
+                _txtTotalTime.BackColor = lighterDark;
+                _txtCategory.BackColor = lighterDark;
+                _txtProject.BackColor = lighterDark;
+                _txtWorkDetails.BackColor = lighterDark;
+                _txtComments.BackColor = lighterDark;
+            }
+            
             LoadReport();
+            
+            var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+            }
+
+            ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings));
+
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -52,6 +76,7 @@ namespace UniConsul.Forms
 
         private void InitializeComponent()
         {
+            this.Name = "FormDailyReport";
             this.Text = "日報の出力";
             this.Size = new Size(580, 600);
             this.StartPosition = FormStartPosition.CenterParent;
@@ -83,6 +108,7 @@ namespace UniConsul.Forms
             this.Controls.Add(topPanel);
 
             var scrollPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(10), FlowDirection = FlowDirection.TopDown, WrapContents = false };
+            scrollPanel.AutoScrollMargin = new Size(0, 30); // 💡 一番下が見切れないようにスクロール下部に余白を追加
             this.Controls.Add(scrollPanel);
             scrollPanel.BringToFront(); // 💡 入力領域を一番手前に持ってくる（上部と被らないようにする）
 
@@ -93,6 +119,10 @@ namespace UniConsul.Forms
             _txtProject = CreateSection(scrollPanel, "■ プロジェクト別内訳:");
             _txtWorkDetails = CreateSection(scrollPanel, "■ 実施した作業内容 (費やした時間):");
             _txtComments = CreateSection(scrollPanel, "■ 所感・コメント:");
+
+            // 💡 確実に「所感・コメント」が隠れないよう、一番下に透明なスペーサーを置く
+            var bottomSpacer = new Panel { Size = new Size(10, 40), BackColor = Color.Transparent };
+            scrollPanel.Controls.Add(bottomSpacer);
             
             // リサイズ時にテキストボックスの幅を追従させる
             scrollPanel.Resize += (s, e) => {
@@ -119,7 +149,10 @@ namespace UniConsul.Forms
                 sz = TextRenderer.MeasureText(txt.Text + "\r\n", txt.Font, sz, flags);
                 int newHeight = sz.Height + (txt.Height - txt.ClientSize.Height) + padding;
                 if (newHeight < 40) newHeight = 40;
-                if (txt.Height != newHeight) txt.Height = newHeight;
+                if (txt.Height != newHeight) {
+                    txt.Height = newHeight;
+                    parent.PerformLayout(); // 高さの変更をスクロール領域の最大値に即座に反映させる
+                }
             };
             
             parent.Controls.Add(txt);
@@ -171,7 +204,17 @@ namespace UniConsul.Forms
             var targetDate = _dtpTargetDate.Value.Date;
             string dateStr = targetDate.ToString("yyyy-MM-dd");
             
-            var sbEvents = new StringBuilder();
+            _txtEvents.Text = GenerateEventsText(dateStr);
+            _txtCompletedTasks.Text = GenerateCompletedTasksText(dateStr);
+            
+            GenerateTimeLogSections(targetDate);
+
+            _txtComments.Text = "";
+        }
+
+        private string GenerateEventsText(string dateStr)
+        {
+            var sb = new StringBuilder();
             if (_events.ContainsKey(dateStr) && _events[dateStr].Count > 0)
             {
                 foreach (var ev in _events[dateStr].OrderBy(e => e.StartTime))
@@ -185,16 +228,19 @@ namespace UniConsul.Forms
                         if (hasStart && hasEnd) timeStr = string.Format("{0:HH:mm} - {1:HH:mm}", st, et);
                         else if (hasStart) timeStr = st.ToString("HH:mm");
                     }
-                    sbEvents.AppendLine(string.Format("  - {0} ({1})", ev.Title, timeStr));
+                    sb.AppendLine(string.Format("  - {0} ({1})", ev.Title, timeStr));
                 }
             }
             else
             {
-                sbEvents.AppendLine("  (なし)");
+                sb.AppendLine("  (なし)");
             }
-            _txtEvents.Text = sbEvents.ToString().TrimEnd();
+            return sb.ToString().TrimEnd();
+        }
 
-            var sbTasks = new StringBuilder();
+        private string GenerateCompletedTasksText(string dateStr)
+        {
+            var sb = new StringBuilder();
             var completedTasks = _tasks.Where(t => t.進捗度 == "完了済み" && t.完了日 == dateStr).ToList();
             if (completedTasks.Count > 0)
             {
@@ -203,15 +249,18 @@ namespace UniConsul.Forms
                     string projName = "(未分類)";
                     var proj = _projects.FirstOrDefault(p => p.ProjectID == t.ProjectID);
                     if (proj != null) projName = proj.ProjectName;
-                    sbTasks.AppendLine(string.Format("  - {0} [{1}]", t.タスク, projName));
+                    sb.AppendLine(string.Format("  - {0} [{1}]", t.タスク, projName));
                 }
             }
             else
             {
-                sbTasks.AppendLine("  (なし)");
+                sb.AppendLine("  (なし)");
             }
-            _txtCompletedTasks.Text = sbTasks.ToString().TrimEnd();
+            return sb.ToString().TrimEnd();
+        }
 
+        private void GenerateTimeLogSections(DateTime targetDate)
+        {
             var dailyLogs = _timeLogs.Where(l => 
                 !string.IsNullOrEmpty(l.StartTime) && 
                 !string.IsNullOrEmpty(l.EndTime) && 
@@ -247,15 +296,7 @@ namespace UniConsul.Forms
                 if (!projectTime.ContainsKey(projName)) projectTime[projName] = 0;
                 projectTime[projName] += sec;
 
-                string taskNameOrMemo = "";
-                if (!string.IsNullOrWhiteSpace(log.Memo))
-                {
-                    taskNameOrMemo = "[メモ] " + log.Memo;
-                }
-                else if (task != null)
-                {
-                    taskNameOrMemo = task.タスク;
-                }
+                string taskNameOrMemo = !string.IsNullOrWhiteSpace(log.Memo) ? "[メモ] " + log.Memo : (task != null ? task.タスク : "");
                 if (!string.IsNullOrEmpty(taskNameOrMemo)) {
                     if (!taskTime.ContainsKey(taskNameOrMemo)) taskTime[taskNameOrMemo] = 0;
                     taskTime[taskNameOrMemo] += sec;
@@ -265,21 +306,8 @@ namespace UniConsul.Forms
             var tsTotal = TimeSpan.FromSeconds(totalSeconds);
             _txtTotalTime.Text = string.Format("{0}時間 {1}分", (int)tsTotal.TotalHours, tsTotal.Minutes);
 
-            var sbCat = new StringBuilder();
-            foreach (var kvp in categoryTime.OrderByDescending(x => x.Value))
-            {
-                var ts = TimeSpan.FromSeconds(kvp.Value);
-                sbCat.AppendLine(string.Format("  - {0}: {1}h {2}m", kvp.Key, (int)ts.TotalHours, ts.Minutes));
-            }
-            _txtCategory.Text = sbCat.ToString().TrimEnd();
-
-            var sbProj = new StringBuilder();
-            foreach (var kvp in projectTime.OrderByDescending(x => x.Value))
-            {
-                var ts = TimeSpan.FromSeconds(kvp.Value);
-                sbProj.AppendLine(string.Format("  - {0}: {1}h {2}m", kvp.Key, (int)ts.TotalHours, ts.Minutes));
-            }
-            _txtProject.Text = sbProj.ToString().TrimEnd();
+            _txtCategory.Text = FormatDictionaryToText(categoryTime);
+            _txtProject.Text = FormatDictionaryToText(projectTime);
 
             var sbWork = new StringBuilder();
             foreach (var kvp in taskTime.OrderByDescending(x => x.Value))
@@ -288,8 +316,17 @@ namespace UniConsul.Forms
                 sbWork.AppendLine(string.Format("  - {0} ({1}時間 {2}分)", kvp.Key, (int)ts.TotalHours, ts.Minutes));
             }
             _txtWorkDetails.Text = sbWork.ToString().TrimEnd();
+        }
 
-            _txtComments.Text = "";
+        private string FormatDictionaryToText(Dictionary<string, double> timeDict)
+        {
+            var sb = new StringBuilder();
+            foreach (var kvp in timeDict.OrderByDescending(x => x.Value))
+            {
+                var ts = TimeSpan.FromSeconds(kvp.Value);
+                sb.AppendLine(string.Format("  - {0}: {1}h {2}m", kvp.Key, (int)ts.TotalHours, ts.Minutes));
+            }
+            return sb.ToString().TrimEnd();
         }
 
         private string BuildReportString()

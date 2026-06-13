@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -62,9 +62,16 @@ namespace UniConsul.Forms
 
             // 💡 ウィンドウサイズの記憶と復元を有効化
             var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+            }
+
             ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings));
 
             DataService.DataUpdated += DataService_DataUpdated;
+
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         private void DataService_DataUpdated(object sender, EventArgs e)
@@ -97,10 +104,11 @@ namespace UniConsul.Forms
 
         private void InitializeComponent()
         {
+            this.Name = "FormTaskInput";
             this.Text = _existingTask != null ? "タスクの編集" : "プロジェクト／タスクの新規追加";
             this.ClientSize = new Size(410, 590);
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.AutoScaleMode = AutoScaleMode.Dpi;

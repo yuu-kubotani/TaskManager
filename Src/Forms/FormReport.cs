@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿// 最新版: コンパイルエラー修復済み
+﻿﻿﻿﻿// 最新版: コンパイルエラー修復済み
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -80,6 +80,12 @@ namespace UniConsul.Forms
             InitializeComponent();
             ThemeManager.ApplyTheme(this, _isDarkMode);
             
+            if (_settings != null && _settings.WindowSizes != null && _settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = _settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+                if (parts.Length >= 3 && int.TryParse(parts[2], out int sp)) try { _mainSplitContainer.SplitterDistance = sp; } catch {}
+            }
+
             ThemeManager.EnableDynamicResizing(this, _settings, () => _dataService.SaveToJson(_dataService.SettingsFile, _settings), _mainSplitContainer);
             
             GenerateDailyReport();
@@ -87,6 +93,8 @@ namespace UniConsul.Forms
             GenerateSpeedReport();
             GenerateWorkHoursReport();
             GenerateMetricsReport();
+
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -102,6 +110,7 @@ namespace UniConsul.Forms
 
         private void InitializeComponent()
         {
+            this.Name = "FormReport";
             this.Text = "レポート分析";
             this.Size = new Size(1200, 850);
             this.StartPosition = FormStartPosition.CenterParent;
@@ -123,7 +132,18 @@ namespace UniConsul.Forms
             this.Controls.Add(_mainSplitContainer);
             _mainSplitContainer.BringToFront();
 
-            _tabControl = new TabControl { Dock = DockStyle.Fill };
+            _tabControl = new TabControl { Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed };
+            _tabControl.DrawItem += (s, e) => {
+                if (e.Index < 0 || e.Index >= _tabControl.TabPages.Count) return;
+                var tabPage = _tabControl.TabPages[e.Index];
+                var tabRect = _tabControl.GetTabRect(e.Index);
+                var isSelected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+                Color bgColor = _isDarkMode ? (isSelected ? Color.FromArgb(80, 80, 80) : Color.FromArgb(45, 45, 48)) : (isSelected ? Color.White : Color.FromArgb(240, 240, 240));
+                Color textColor = _isDarkMode ? Color.White : Color.Black;
+                using (var bgBrush = new SolidBrush(bgColor)) e.Graphics.FillRectangle(bgBrush, tabRect);
+                TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter;
+                TextRenderer.DrawText(e.Graphics, tabPage.Text, _tabControl.Font, tabRect, textColor, flags);
+            };
             _mainSplitContainer.Panel1.Controls.Add(_tabControl);
 
             DateTime defaultStart = DateTime.Today.AddDays(-30);
@@ -308,15 +328,13 @@ namespace UniConsul.Forms
 
         private Chart CreateBaseChart(string title)
         {
-            var chart = new Chart { Dock = DockStyle.Fill, BackColor = Color.Transparent };
-            var area = new ChartArea { Name = "MainArea", BackColor = Color.Transparent };
+            var chart = new Chart { Dock = DockStyle.Fill, BackColor = _isDarkMode ? Color.FromArgb(45, 45, 48) : Color.White };
+            var area = new ChartArea { Name = "MainArea", BackColor = _isDarkMode ? Color.FromArgb(45, 45, 48) : Color.White };
             area.AxisX.LabelStyle.Angle = -45;
             area.AxisX.Interval = 1;
             
             if (_isDarkMode) {
-                chart.BackColor = Color.FromArgb(30, 30, 30);
                 chart.ForeColor = Color.White;
-                area.BackColor = Color.FromArgb(30, 30, 30);
                 area.AxisX.LabelStyle.ForeColor = Color.White;
                 area.AxisY.LabelStyle.ForeColor = Color.White;
                 area.AxisX.LineColor = Color.Gray;
@@ -324,15 +342,20 @@ namespace UniConsul.Forms
                 area.AxisX.MajorGrid.LineColor = Color.FromArgb(60, 60, 60);
                 area.AxisY.MajorGrid.LineColor = Color.FromArgb(60, 60, 60);
             } else {
+                chart.ForeColor = Color.Black;
+                area.AxisX.LabelStyle.ForeColor = Color.Black;
+                area.AxisY.LabelStyle.ForeColor = Color.Black;
+                area.AxisX.LineColor = Color.Black;
+                area.AxisY.LineColor = Color.Black;
                 area.AxisX.MajorGrid.LineColor = Color.Gainsboro;
                 area.AxisY.MajorGrid.LineColor = Color.Gainsboro;
             }
             chart.ChartAreas.Add(area);
             var t = chart.Titles.Add(title);
             t.Font = new Font("Meiryo UI", 10, FontStyle.Bold);
-            if (_isDarkMode) t.ForeColor = Color.White;
-            var lg = new Legend("Default") { Docking = Docking.Top, Font = new Font("Meiryo UI", 8), BackColor = Color.Transparent };
-            if (_isDarkMode) lg.ForeColor = Color.White;
+            t.ForeColor = _isDarkMode ? Color.White : Color.Black;
+            var lg = new Legend("Default") { Docking = Docking.Top, Font = new Font("Meiryo UI", 8), BackColor = _isDarkMode ? Color.FromArgb(45, 45, 48) : Color.White };
+            lg.ForeColor = _isDarkMode ? Color.White : Color.Black;
             chart.Legends.Add(lg);
             return chart;
         }
@@ -807,6 +830,36 @@ namespace UniConsul.Forms
                     } else {
                         insights += string.Format("• [傾向]  「{0}」の時間は全体の {1:F1}% を占めています。このカテゴリの時間を調整したい場合、タイムブロッキングなどの手法が有効です。\r\n", topCategory.label, percentage);
                     }
+                }
+
+                double daysInRange = Math.Max(1, (endT - startT).TotalDays);
+                var completedInRange = _allTasks.Where(t => t.進捗度 == "完了済み" && !string.IsNullOrEmpty(t.完了日) && DateTime.TryParse(t.完了日, out DateTime cd) && cd.Date >= startT && cd.Date <= endT).ToList();
+                double completedPerDay = completedInRange.Count / daysInRange;
+                if (completedPerDay >= 3.0) {
+                    insights += string.Format("• [生産性] 🚀 期間中、1日あたり平均 {0:F1} 件のタスクを完了しています！非常に高い実行力でタスクを消化できています。\r\n", completedPerDay);
+                }
+
+                var weekendLogs = dataForCharts.Where(d => {
+                    DateTime dt; return DateTime.TryParse(d.Date, out dt) && (dt.DayOfWeek == DayOfWeek.Saturday || dt.DayOfWeek == DayOfWeek.Sunday);
+                }).ToList();
+                double weekendHours = weekendLogs.Sum(d => d.Hours);
+                if (totalHours > 0 && weekendHours / totalHours > 0.25) { 
+                    insights += "• [ワークライフバランス] ⚠️ 週末の作業割合が全体の25%を超えています。バーンアウト（燃え尽き）を防ぐため、意図的に完全なオフの日を作ることを検討してください。\r\n";
+                }
+
+                var filteredTimeLogs = _allTimeLogs.Where(l => !string.IsNullOrEmpty(l.StartTime) && !string.IsNullOrEmpty(l.EndTime) && DateTime.TryParse(l.StartTime, out DateTime st) && st.Date >= startT && st.Date <= endT).ToList();
+                if (filteredTimeLogs.Count > 0) {
+                    double avgSessionHours = filteredTimeLogs.Select(l => (DateTime.Parse(l.EndTime) - DateTime.Parse(l.StartTime)).TotalHours).Average();
+                    if (avgSessionHours > 2.0) {
+                        insights += "• [休憩不足] ⚠️ 1回あたりの連続作業時間が平均2時間を超えています。集中力と生産性を維持するため、ポモドーロ・テクニック（25分作業＋5分休憩）などを活用して適度に休憩を挟むことをお勧めします。\r\n";
+                    } else if (avgSessionHours > 0 && avgSessionHours <= 1.0) {
+                        insights += "• [集中力] 🧠 1回あたりの作業時間が適度に区切られており、こまめに記録（または休憩）を取る良い習慣ができています。\r\n";
+                    }
+                }
+
+                var heavyTasks = completedInRange.Where(t => t.TrackedTimeSeconds / 3600.0 >= 8.0).ToList();
+                if (heavyTasks.Count > 0) {
+                    insights += string.Format("• [タスク粒度] 🧱 実働時間が8時間以上の重いタスクが {0} 件ありました。タスクの粒度が大きすぎるとモチベーションの維持が難しくなるため、より細かなサブタスクに分割して着手しやすくすることをお勧めします。\r\n", heavyTasks.Count);
                 }
             }
 

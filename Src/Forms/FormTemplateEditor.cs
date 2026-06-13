@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -38,6 +38,12 @@ namespace UniConsul.Forms
 
             // 全体設定をロードして、ウィンドウサイズとスプリッター位置の記憶を有効化
             var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+                if (parts.Length >= 3 && int.TryParse(parts[2], out int sp)) try { _mainSplitContainer.SplitterDistance = sp; } catch {}
+            }
+
             ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings), _mainSplitContainer);
 
             // 境界線が左に寄りすぎている場合や右に行き過ぎている場合、適切な位置に強制補正する
@@ -45,6 +51,8 @@ namespace UniConsul.Forms
             if (_mainSplitContainer.SplitterDistance < 200 || _mainSplitContainer.SplitterDistance > 400) _mainSplitContainer.SplitterDistance = 310;
 
             LoadTemplates();
+
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -59,6 +67,7 @@ namespace UniConsul.Forms
 
         private void InitializeComponent()
         {
+            this.Name = "FormTemplateEditor";
             this.Text = "テンプレートの編集";
             this.Size = new Size(950, 600);
             this.StartPosition = FormStartPosition.CenterParent;

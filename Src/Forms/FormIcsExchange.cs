@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -32,14 +32,26 @@ namespace UniConsul.Forms
             _events = events;
             _projects = projects;
 
+            this.Name = "FormIcsExchange";
             this.Text = "ICS連携 (インポート/エクスポート)";
             this.Size = new Size(400, 370);
             this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
             this.MaximizeBox = false;
             this.AutoScaleMode = AutoScaleMode.Dpi;
 
-            var tabControl = new TabControl { Dock = DockStyle.Fill };
+            var tabControl = new TabControl { Dock = DockStyle.Fill, DrawMode = TabDrawMode.OwnerDrawFixed };
+            tabControl.DrawItem += (s, e) => {
+                if (e.Index < 0 || e.Index >= tabControl.TabPages.Count) return;
+                var tabPage = tabControl.TabPages[e.Index];
+                var tabRect = tabControl.GetTabRect(e.Index);
+                var isSelected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+                Color bgColor = isDarkMode ? (isSelected ? Color.FromArgb(80, 80, 80) : Color.FromArgb(45, 45, 48)) : (isSelected ? Color.White : Color.FromArgb(240, 240, 240));
+                Color textColor = isDarkMode ? Color.White : Color.Black;
+                using (var bgBrush = new SolidBrush(bgColor)) e.Graphics.FillRectangle(bgBrush, tabRect);
+                TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter;
+                TextRenderer.DrawText(e.Graphics, tabPage.Text, tabControl.Font, tabRect, textColor, flags);
+            };
             var tabExport = new TabPage("エクスポート");
             tabControl.TabPages.Add(tabExport);
             this.Controls.Add(tabControl);
@@ -88,6 +100,14 @@ namespace UniConsul.Forms
             tabImport.Controls.Add(btnImport);
 
             ThemeManager.ApplyTheme(this, isDarkMode);
+            
+            var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+            }
+
+            ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings));
         }
 
         protected override void OnHandleCreated(EventArgs e)

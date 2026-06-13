@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿using System;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Collections.Generic;
@@ -27,6 +27,7 @@ namespace UniConsul.Forms
             if (_settings.AutoTracker == null) _settings.AutoTracker = new AutoTrackerSettings();
             if (_settings.AutoTracker.LearningDictionary == null) _settings.AutoTracker.LearningDictionary = new List<string>();
 
+            this.Name = "FormLearningDictionary";
             this.Text = "学習辞書の管理";
             this.Size = new Size(650, 450);
             this.StartPosition = FormStartPosition.CenterParent;
@@ -54,6 +55,13 @@ namespace UniConsul.Forms
             this.Controls.Add(pnlBottom);
 
             ThemeManager.ApplyTheme(this, isDarkMode);
+            
+            if (_settings != null && _settings.WindowSizes != null && _settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = _settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+            }
+
+            ThemeManager.EnableDynamicResizing(this, _settings, () => _dataService.SaveToJson(_dataService.SettingsFile, _settings));
         }
 
         protected override void OnHandleCreated(EventArgs e)

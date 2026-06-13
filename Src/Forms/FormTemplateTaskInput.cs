@@ -36,6 +36,14 @@ namespace UniConsul.Forms
             InitializeComponent();
             LoadData();
             ThemeManager.ApplyTheme(this, isDarkMode);
+
+            var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+            }
+
+            ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings));
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -50,10 +58,11 @@ namespace UniConsul.Forms
 
         private void InitializeComponent()
         {
+            this.Name = "FormTemplateTaskInput";
             this.Text = _existingTask != null ? "テンプレートタスクの編集" : "テンプレートタスクの追加";
             this.Size = new Size(350, 350);
             this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
             this.AutoScaleMode = AutoScaleMode.Dpi;

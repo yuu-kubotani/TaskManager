@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿﻿﻿﻿﻿﻿using System;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -48,6 +48,8 @@ namespace UniConsul.Forms
 
             LoadBackups();
             ThemeManager.ApplyTheme(this, isDarkMode);
+
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         protected override void OnHandleCreated(EventArgs e)

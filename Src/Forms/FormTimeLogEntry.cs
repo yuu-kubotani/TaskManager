@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -12,6 +12,9 @@ namespace UniConsul.Forms
     {
         [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        [System.Runtime.InteropServices.DllImport("uxtheme.dll", ExactSpelling = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hwnd, string pszSubAppName, string pszSubIdList);
 
         public TimeLog ResultLog { get; private set; }
         public bool SaveToDictionary { get; private set; }
@@ -88,6 +91,10 @@ namespace UniConsul.Forms
                     c.ForeColor = fg;
                     if (c is ComboBox) ((ComboBox)c).FlatStyle = FlatStyle.Flat;
                     if (c is TextBox) ((TextBox)c).BorderStyle = BorderStyle.FixedSingle;
+                }
+                else if (c.GetType() == typeof(DateTimePicker))
+                {
+                    // WinFormsの仕様上、DateTimePickerの入力欄はOSのシステムカラーで固定されるため設定を除外
                 }
                 else if (c is Button)
                 {

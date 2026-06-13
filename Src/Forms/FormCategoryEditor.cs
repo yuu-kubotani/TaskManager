@@ -22,13 +22,14 @@ namespace UniConsul.Forms
             _dataService = dataService;
             _categories = categories ?? new Dictionary<string, List<string>>();
 
+            this.Name = "FormCategoryEditor";
             this.Text = "カテゴリ編集";
-            this.Size = new Size(500, 450);
+            this.Size = new Size(750, 450);
             this.StartPosition = FormStartPosition.CenterParent;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
             this.AutoScaleMode = AutoScaleMode.Dpi;
 
-            var splitContainer = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 240 };
+            var splitContainer = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 160 };
             
             // 左側: カテゴリ
             var groupCat = new GroupBox { Text = "カテゴリ", Dock = DockStyle.Fill };
@@ -38,10 +39,10 @@ namespace UniConsul.Forms
                 if (e.KeyCode == Keys.Delete) BtnDelCat_Click(s, e);
             };
             
-            var panelCatBtns = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 35 };
-            var btnAddCat = new Button { Text = "追加", Width = 55 };
-            var btnRenCat = new Button { Text = "名前変更", Width = 70 };
-            var btnDelCat = new Button { Text = "削除", Width = 55 };
+            var panelCatBtns = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 35, WrapContents = false };
+            var btnAddCat = new Button { Text = "追加", Width = 45, Margin = new Padding(2) };
+            var btnRenCat = new Button { Text = "変更", Width = 45, Margin = new Padding(2) };
+            var btnDelCat = new Button { Text = "削除", Width = 45, Margin = new Padding(2) };
             
             btnAddCat.Click += BtnAddCat_Click;
             btnRenCat.Click += BtnRenCat_Click;
@@ -60,9 +61,9 @@ namespace UniConsul.Forms
             };
             
             var panelSubBtns = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 35 };
-            var btnAddSub = new Button { Text = "追加", Width = 55 };
-            var btnRenSub = new Button { Text = "名前変更", Width = 70 };
-            var btnDelSub = new Button { Text = "削除", Width = 55 };
+            var btnAddSub = new Button { Text = "追加", Width = 60, Margin = new Padding(3) };
+            var btnRenSub = new Button { Text = "名前変更", Width = 80, Margin = new Padding(3) };
+            var btnDelSub = new Button { Text = "削除", Width = 60, Margin = new Padding(3) };
             
             btnAddSub.Click += BtnAddSub_Click;
             btnRenSub.Click += BtnRenSub_Click;
@@ -88,6 +89,17 @@ namespace UniConsul.Forms
             RefreshCategories();
             ThemeManager.ApplyTheme(this, isDarkMode);
             DataService.DataUpdated += DataService_DataUpdated;
+
+            var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+                if (parts.Length >= 3 && int.TryParse(parts[2], out int sp) && splitContainer != null) try { splitContainer.SplitterDistance = sp; } catch {}
+            }
+
+            ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings), splitContainer);
+            
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         private void DataService_DataUpdated(object sender, EventArgs e)

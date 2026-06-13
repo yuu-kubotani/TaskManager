@@ -1,4 +1,4 @@
-﻿using System;
+﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -12,6 +12,9 @@ namespace UniConsul.Forms
     {
         [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
+        [System.Runtime.InteropServices.DllImport("uxtheme.dll", ExactSpelling = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hwnd, string pszSubAppName, string pszSubIdList);
 
         private DataService _dataService;
         private List<ProjectItem> _projects;
@@ -47,6 +50,7 @@ namespace UniConsul.Forms
                 _initialItem = initialItem;
             }
 
+            this.Name = "FormRecurringRuleEditor";
             this.Text = "定期実行ルール統合管理 (C#版)";
             this.Size = new Size(900, 850);
             this.StartPosition = FormStartPosition.CenterParent;
@@ -230,6 +234,17 @@ namespace UniConsul.Forms
 
             _cmbIntervalPreset.SelectedIndex = 0;
             LoadData();
+
+            var settings = _dataService.LoadSettings();
+            if (settings != null && settings.WindowSizes != null && settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) this.Size = new Size(Math.Max(300, w), Math.Max(200, h));
+                if (parts.Length >= 3 && int.TryParse(parts[2], out int sp)) try { splitContainer.SplitterDistance = sp; } catch {}
+            }
+
+            ThemeManager.EnableDynamicResizing(this, settings, () => _dataService.SaveToJson(_dataService.SettingsFile, settings), splitContainer);
+
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         protected override void OnLoad(EventArgs e)
@@ -256,11 +271,21 @@ namespace UniConsul.Forms
             foreach (Control c in parent.Controls) {
                 if (c is Panel || c is GroupBox || c is SplitContainer || c is SplitterPanel) c.BackColor = formBg;
                 else if (c is TextBox || c is ComboBox || c is NumericUpDown) {
-                    c.BackColor = surfaceBg; c.ForeColor = fg;
-                    var cmb = c as ComboBox;
-                    if (cmb != null) cmb.FlatStyle = FlatStyle.Flat;
-                    var txt = c as TextBox;
-                    if (txt != null) txt.BorderStyle = BorderStyle.FixedSingle;
+                    c.BackColor = surfaceBg;
+                    c.ForeColor = fg;
+                    
+                    ComboBox comboCtrl = c as ComboBox;
+                    if (comboCtrl != null) {
+                        comboCtrl.FlatStyle = FlatStyle.Flat;
+                    }
+                    TextBox textCtrl = c as TextBox;
+                    if (textCtrl != null) {
+                        textCtrl.BorderStyle = BorderStyle.FixedSingle;
+                    }
+                }
+                else if (c.GetType() == typeof(DateTimePicker))
+                {
+                    // WinFormsの仕様上、DateTimePickerの入力欄はOSのシステムカラーで固定されるため設定を除外
                 }
                 else if (c is DataGridView) {
                     var dgv = (DataGridView)c;

@@ -29,6 +29,8 @@ namespace UniConsul.Forms
             _existingEvent = existingEvent;
             InitializeComponent(defaultStartTime);
             LoadData();
+            
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
         }
 
         protected override void OnHandleCreated(EventArgs e)
@@ -69,9 +71,7 @@ namespace UniConsul.Forms
                 }
                 else if (c is DateTimePicker)
                 {
-                    var dtp = (DateTimePicker)c;
-                    dtp.BackColor = surfaceBg;
-                    dtp.ForeColor = fg;
+                    // WinFormsの仕様上、DateTimePickerの入力欄はOSのシステムカラーで固定されるため設定を除外
                 }
                 else if (c is Button)
                 {

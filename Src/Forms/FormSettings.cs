@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿using System;
+﻿﻿﻿﻿﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
@@ -89,6 +89,17 @@ namespace UniConsul.Forms
             InitializeComponent();
             LoadData();
 
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
+
+            // 💡 設定画面自身のサイズ復元
+            if (_settings != null && _settings.WindowSizes != null && _settings.WindowSizes.ContainsKey(this.Name)) {
+                var parts = _settings.WindowSizes[this.Name].Split(',');
+                if (parts.Length >= 2 && int.TryParse(parts[0], out int w) && int.TryParse(parts[1], out int h)) {
+                    this.Width = Math.Max(this.MinimumSize.Width, w);
+                    this.Height = Math.Max(this.MinimumSize.Height, h);
+                }
+            }
+
             // 💡 FormSettings自身のリサイズ処理が_settings.WindowWidth(メイン画面の幅)を誤って上書きするのを防ぐため、
             // ここでの EnableDynamicResizing の呼び出しは無効化します。
             // ThemeManager.EnableDynamicResizing(this, _settings);
@@ -121,6 +132,7 @@ namespace UniConsul.Forms
 
         private void InitializeComponent()
         {
+            this.Name = "FormSettings";
             this.Text = "全体設定";
             this.Size = new Size(860, 850);
             this.StartPosition = FormStartPosition.CenterParent;
@@ -315,21 +327,19 @@ namespace UniConsul.Forms
             chkRememberWindowSize = new CheckBox { Text = "終了時のウィンドウサイズと分割位置を記憶する", AutoSize = true };
             btnResetWindowSize = new Button { Text = "初期値に戻す", Width = 100, Height = 25 };
             btnResetWindowSize.Click += (s, e) => {
-                numWindowWidth.Value = 1440;
-                numWindowHeight.Value = 1024;
-                numMainSplitter.Value = 600;
-                numFilesSplitter.Value = 380;
-                numCalendarSplitter.Value = 400;
-                numCalendarLeftSplitter.Value = 350;
+                numWindowWidth.Value = FormMain.DefaultWindowWidth;
+                numWindowHeight.Value = FormMain.DefaultWindowHeight;
+                numMainSplitter.Value = FormMain.DefaultMainSplitter;
+                numFilesSplitter.Value = FormMain.DefaultFilesSplitter;
+                numCalendarSplitter.Value = FormMain.DefaultCalendarSplitter;
+                numCalendarLeftSplitter.Value = FormMain.DefaultCalendarLeftSplitter;
                 
-                if (subWindowSizeControls.ContainsKey("FormTaskInput")) { subWindowSizeControls["FormTaskInput"][0].Value = 450; subWindowSizeControls["FormTaskInput"][1].Value = 650; }
-                if (subWindowSizeControls.ContainsKey("FormProjectInput")) { subWindowSizeControls["FormProjectInput"][0].Value = 350; subWindowSizeControls["FormProjectInput"][1].Value = 230; }
-                if (subWindowSizeControls.ContainsKey("FormCategoryEditor")) { subWindowSizeControls["FormCategoryEditor"][0].Value = 650; subWindowSizeControls["FormCategoryEditor"][1].Value = 500; }
-                if (subWindowSizeControls.ContainsKey("FormTemplateEditor")) { subWindowSizeControls["FormTemplateEditor"][0].Value = 950; subWindowSizeControls["FormTemplateEditor"][1].Value = 600; }
-                if (subWindowSizeControls.ContainsKey("FormTemplateTaskInput")) { subWindowSizeControls["FormTemplateTaskInput"][0].Value = 350; subWindowSizeControls["FormTemplateTaskInput"][1].Value = 320; }
-                if (subWindowSizeControls.ContainsKey("FormArchiveView")) { subWindowSizeControls["FormArchiveView"][0].Value = 800; subWindowSizeControls["FormArchiveView"][1].Value = 600; }
-                if (subWindowSizeControls.ContainsKey("FormReport")) { subWindowSizeControls["FormReport"][0].Value = 1200; subWindowSizeControls["FormReport"][1].Value = 850; }
-                if (subWindowSizeControls.ContainsKey("FormSettings")) { subWindowSizeControls["FormSettings"][0].Value = 860; subWindowSizeControls["FormSettings"][1].Value = 850; }
+                foreach (var kvp in FormMain.DefaultSubWindowSizes) {
+                    if (subWindowSizeControls.ContainsKey(kvp.Key)) {
+                        subWindowSizeControls[kvp.Key][0].Value = kvp.Value.Width;
+                        subWindowSizeControls[kvp.Key][1].Value = kvp.Value.Height;
+                    }
+                }
             };
             AddField(tabLayout, ref y, null, chkRememberWindowSize, null, btnResetWindowSize);
 
@@ -351,7 +361,12 @@ namespace UniConsul.Forms
             tabLayout.Controls.Add(new Label { Text = "■ 各サブ画面のサイズ:", Location = new Point(15, y), AutoSize = true, Font = new Font("Meiryo UI", 9, FontStyle.Bold) });
             y += 25;
 
-            string[] subForms = { "FormTaskInput|タスク編集", "FormProjectInput|PJ編集", "FormCategoryEditor|カテゴリ編集", "FormTemplateEditor|テンプレート", "FormTemplateTaskInput|テンプレタスク", "FormArchiveView|アーカイブ", "FormReport|レポート", "FormSettings|設定画面" };
+            string[] subForms = { 
+                "FormTaskInput|タスク編集", "FormProjectInput|PJ編集", "FormCategoryEditor|カテゴリ編集", 
+                "FormTemplateEditor|テンプレート", "FormTemplateTaskInput|テンプレタスク", "FormArchiveView|アーカイブ", 
+                "FormReport|レポート", "FormSettings|設定画面", "FormRecurringRuleEditor|定期ルール", 
+                "FormDailyReport|日報出力", "FormLearningDictionary|学習辞書", "FormIcsExchange|ICS連携" 
+            };
             foreach (var sf in subForms) {
                 var parts = sf.Split('|');
                 var key = parts[0];
@@ -551,12 +566,12 @@ namespace UniConsul.Forms
             try { numLongTask.Value = _settings.LongTaskNotificationMinutes; } catch { numLongTask.Value = 180; }
 
             try { chkRememberWindowSize.Checked = _settings.RememberWindowSize; } catch { chkRememberWindowSize.Checked = true; }
-            try { numWindowWidth.Value = Math.Max(800, _settings.WindowWidth); } catch { numWindowWidth.Value = 1440; }
-            try { numWindowHeight.Value = Math.Max(600, _settings.WindowHeight); } catch { numWindowHeight.Value = 1024; }
-            try { numMainSplitter.Value = Math.Max(100, _settings.MainSplitterDistance); } catch { numMainSplitter.Value = 600; }
-            try { numFilesSplitter.Value = Math.Max(100, _settings.FilesSplitterDistance); } catch { numFilesSplitter.Value = 380; }
-            try { numCalendarSplitter.Value = Math.Max(100, _settings.CalendarSplitterDistance); } catch { numCalendarSplitter.Value = 400; }
-            try { numCalendarLeftSplitter.Value = Math.Max(100, _settings.CalendarLeftSplitterDistance); } catch { numCalendarLeftSplitter.Value = 350; }
+            try { numWindowWidth.Value = Math.Max(800, _settings.WindowWidth); } catch { numWindowWidth.Value = FormMain.DefaultWindowWidth; }
+            try { numWindowHeight.Value = Math.Max(600, _settings.WindowHeight); } catch { numWindowHeight.Value = FormMain.DefaultWindowHeight; }
+            try { numMainSplitter.Value = Math.Max(100, _settings.MainSplitterDistance); } catch { numMainSplitter.Value = FormMain.DefaultMainSplitter; }
+            try { numFilesSplitter.Value = Math.Max(100, _settings.FilesSplitterDistance); } catch { numFilesSplitter.Value = FormMain.DefaultFilesSplitter; }
+            try { numCalendarSplitter.Value = Math.Max(100, _settings.CalendarSplitterDistance); } catch { numCalendarSplitter.Value = FormMain.DefaultCalendarSplitter; }
+            try { numCalendarLeftSplitter.Value = Math.Max(100, _settings.CalendarLeftSplitterDistance); } catch { numCalendarLeftSplitter.Value = FormMain.DefaultCalendarLeftSplitter; }
 
             if (_settings.WindowSizes != null) {
                 foreach (var key in subWindowSizeControls.Keys) {
@@ -567,26 +582,18 @@ namespace UniConsul.Forms
                             try { subWindowSizeControls[key][1].Value = Math.Max(200, h); } catch {}
                         }
                     } else {
-                        if (key == "FormTaskInput") { subWindowSizeControls[key][0].Value = 450; subWindowSizeControls[key][1].Value = 650; }
-                        if (key == "FormProjectInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 230; }
-                        if (key == "FormCategoryEditor") { subWindowSizeControls[key][0].Value = 650; subWindowSizeControls[key][1].Value = 500; }
-                        if (key == "FormTemplateEditor") { subWindowSizeControls[key][0].Value = 950; subWindowSizeControls[key][1].Value = 600; }
-                        if (key == "FormTemplateTaskInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 320; }
-                        if (key == "FormArchiveView") { subWindowSizeControls[key][0].Value = 800; subWindowSizeControls[key][1].Value = 600; }
-                        if (key == "FormReport") { subWindowSizeControls[key][0].Value = 1200; subWindowSizeControls[key][1].Value = 850; }
-                        if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 860; subWindowSizeControls[key][1].Value = 850; }
+                        if (FormMain.DefaultSubWindowSizes.ContainsKey(key)) {
+                            subWindowSizeControls[key][0].Value = FormMain.DefaultSubWindowSizes[key].Width;
+                            subWindowSizeControls[key][1].Value = FormMain.DefaultSubWindowSizes[key].Height;
+                        }
                     }
                 }
             } else {
                 foreach (var key in subWindowSizeControls.Keys) {
-                    if (key == "FormTaskInput") { subWindowSizeControls[key][0].Value = 450; subWindowSizeControls[key][1].Value = 650; }
-                    if (key == "FormProjectInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 230; }
-                    if (key == "FormCategoryEditor") { subWindowSizeControls[key][0].Value = 650; subWindowSizeControls[key][1].Value = 500; }
-                    if (key == "FormTemplateEditor") { subWindowSizeControls[key][0].Value = 950; subWindowSizeControls[key][1].Value = 600; }
-                    if (key == "FormTemplateTaskInput") { subWindowSizeControls[key][0].Value = 350; subWindowSizeControls[key][1].Value = 320; }
-                    if (key == "FormArchiveView") { subWindowSizeControls[key][0].Value = 800; subWindowSizeControls[key][1].Value = 600; }
-                    if (key == "FormReport") { subWindowSizeControls[key][0].Value = 1200; subWindowSizeControls[key][1].Value = 850; }
-                    if (key == "FormSettings") { subWindowSizeControls[key][0].Value = 860; subWindowSizeControls[key][1].Value = 850; }
+                    if (FormMain.DefaultSubWindowSizes.ContainsKey(key)) {
+                        subWindowSizeControls[key][0].Value = FormMain.DefaultSubWindowSizes[key].Width;
+                        subWindowSizeControls[key][1].Value = FormMain.DefaultSubWindowSizes[key].Height;
+                    }
                 }
             }
 
@@ -765,18 +772,6 @@ namespace UniConsul.Forms
                 return;
             }
 
-            // 💡 閉じる直前に、手入力された「設定画面自身」のサイズを実際のウィンドウに適用する。
-            // ウィンドウサイズ変更時にResizeイベントが発火し予期せぬ値の上書きが発生するのを防ぐため、
-            // 先にウィンドウサイズを変更してから、UIの値をSettingsに保存します。
-            if (_settings.WindowSizes != null && _settings.WindowSizes.ContainsKey("FormSettings"))
-            {
-                var parts = _settings.WindowSizes["FormSettings"].Split(',');
-                int w; int h; if (parts.Length >= 2 && int.TryParse(parts[0], out w) && int.TryParse(parts[1], out h))
-                {
-                    this.Width = Math.Max(this.MinimumSize.Width, w);
-                    this.Height = Math.Max(this.MinimumSize.Height, h);
-                }
-            }
             
             UpdateSettingsFromUI();
 

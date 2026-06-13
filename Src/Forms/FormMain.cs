@@ -1,4 +1,4 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -15,7 +15,37 @@ namespace UniConsul.Forms
     public partial class FormMain : Form, IMessageFilter
     {
         // PowerShellの $script: 変数群に相当するグローバル状態
-        private readonly string AppVersion = "13.0";
+        private readonly string AppVersion = "1.0.0";
+
+        // ==========================================
+        // アプリケーションの初期設定（デフォルト値）
+        // ==========================================
+        public static readonly int DefaultWindowWidth = 1440;
+        public static readonly int DefaultWindowHeight = 1024;
+        public static readonly int DefaultMainSplitter = 600;
+        public static readonly int DefaultFilesSplitter = 380;
+        public static readonly int DefaultCalendarSplitter = 1080;
+        public static readonly int DefaultCalendarLeftSplitter = 550;
+
+        // 各サブ画面のデフォルトサイズ (幅, 高さ)
+        public static readonly Dictionary<string, Size> DefaultSubWindowSizes = new Dictionary<string, Size>
+        {
+            { "FormTaskInput", new Size(450, 650) },
+            { "FormProjectInput", new Size(350, 230) },
+            { "FormCategoryEditor", new Size(650, 500) },
+            { "FormTemplateEditor", new Size(950, 600) },
+            { "FormTemplateTaskInput", new Size(350, 320) },
+            { "FormArchiveView", new Size(800, 600) },
+            { "FormReport", new Size(1200, 850) },
+            { "FormSettings", new Size(860, 850) },
+            { "FormRecurringRuleEditor", new Size(900, 850) },
+            { "FormDailyReport", new Size(580, 600) },
+            { "FormLearningDictionary", new Size(650, 450) },
+            { "FormIcsExchange", new Size(400, 370) }
+        };
+
+        [System.Runtime.InteropServices.DllImport("uxtheme.dll", ExactSpelling = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private static extern int SetWindowTheme(IntPtr hwnd, string pszSubAppName, string pszSubIdList);
 
         [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
@@ -49,9 +79,6 @@ namespace UniConsul.Forms
         [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto, SetLastError = true)]
         [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
         private static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
-
-        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Auto)]
-        private static extern bool DestroyIcon(IntPtr handle);
 
         private AppSettings Settings;
         private DataService dataService;
@@ -410,11 +437,32 @@ namespace UniConsul.Forms
             return false;
         }
 
+        // --- プルダウン(ComboBox)の中身をダークモードで美しく描画するための処理 ---
+        private void ComboBox_DrawItem(object sender, DrawItemEventArgs e)
+        {
+            var cmb = sender as ComboBox;
+            if (cmb == null || e.Index < 0) return;
+            
+            e.DrawBackground();
+            bool isSelected = (e.State & DrawItemState.Selected) == DrawItemState.Selected;
+            
+            Color backColor = isDarkMode ? (isSelected ? Color.FromArgb(80, 80, 80) : Color.FromArgb(45, 45, 48)) : (isSelected ? SystemColors.Highlight : SystemColors.Window);
+            Color foreColor = isDarkMode ? Color.White : (isSelected ? SystemColors.HighlightText : SystemColors.WindowText);
+            
+            using (var brush = new SolidBrush(backColor)) 
+            {
+                e.Graphics.FillRectangle(brush, e.Bounds);
+            }
+            
+            string text = cmb.Items[e.Index].ToString();
+            TextRenderer.DrawText(e.Graphics, text, e.Font, e.Bounds, foreColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        }
+
         private void InitializeComponent()
         {
             this.Text = string.Format("Uni Consul v{0}", AppVersion);
-            this.Width = 1440;
-            this.Height = 1024;
+            this.Width = DefaultWindowWidth;
+            this.Height = DefaultWindowHeight;
             this.StartPosition = FormStartPosition.CenterScreen;
             this.AutoScaleMode = AutoScaleMode.Dpi;
             this.KeyPreview = true; // フォーム全体でキーイベントを取得可能にする
@@ -784,7 +832,7 @@ namespace UniConsul.Forms
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Horizontal,
-                SplitterDistance = 550
+                SplitterDistance = DefaultMainSplitter
             };
             
             // --- クイック設定パネルの構築 ---
@@ -812,6 +860,9 @@ namespace UniConsul.Forms
 
             qFlow.Controls.Add(new Label { Text = "カテゴリ絞り込み:", AutoSize = true });
             qCmbCategoryFilter = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+            qCmbCategoryFilter.DrawMode = DrawMode.OwnerDrawFixed;
+            qCmbCategoryFilter.FlatStyle = FlatStyle.Flat;
+            qCmbCategoryFilter.DrawItem += ComboBox_DrawItem;
             qCmbCategoryFilter.SelectedIndexChanged += (s, e) => {
                 currentCategoryFilter = qCmbCategoryFilter.SelectedItem != null ? qCmbCategoryFilter.SelectedItem.ToString() : "(すべて)";
                 UpdateAllViews();
@@ -835,6 +886,9 @@ namespace UniConsul.Forms
 
             qFlow.Controls.Add(new Label { Text = "リスト行間:", AutoSize = true, Margin = new Padding(0, 10, 0, 0) });
             qCmbDensity = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
+            qCmbDensity.DrawMode = DrawMode.OwnerDrawFixed;
+            qCmbDensity.FlatStyle = FlatStyle.Flat;
+            qCmbDensity.DrawItem += ComboBox_DrawItem;
             qCmbDensity.Items.AddRange(new[] { "狭い (Compact)", "標準 (Standard)", "広い (Relaxed)" });
             qCmbDensity.SelectedIndexChanged += (s, e) => { 
                 if (Settings != null && qCmbDensity.SelectedIndex >= 0) { 
@@ -987,7 +1041,7 @@ namespace UniConsul.Forms
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
-                SplitterDistance = (int)(this.Width * 0.4) // リスト領域を広げるため40%にする
+                SplitterDistance = DefaultFilesSplitter
             };
             mainContainer.Panel2.Controls.Add(associatedFilesSplitContainer);
 
@@ -1095,31 +1149,11 @@ namespace UniConsul.Forms
             };
 
             // --- カスタムアイコンの読み込み ---
-            try
+            UniConsul.Utils.IconHelper.SetAppIcon(this);
+            if (this.Icon != null)
             {
-                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uni consul（ユニコン）.png");
-                if (!File.Exists(iconPath))
-                {
-                    iconPath = @"C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\uni consul（ユニコン）.png";
-                }
-                
-                if (File.Exists(iconPath))
-                {
-                    using (Bitmap bmp = new Bitmap(iconPath))
-                    {
-                        IntPtr hIcon = bmp.GetHicon();
-                        Icon customIcon = Icon.FromHandle(hIcon);
-                        this.Icon = customIcon;
-                        notifyIcon.Icon = customIcon;
-
-                        this.FormClosed += (senderClosed, eClosed) => {
-                            if (customIcon != null) customIcon.Dispose();
-                            DestroyIcon(hIcon);
-                        };
-                    }
-                }
+                notifyIcon.Icon = this.Icon;
             }
-            catch { }
 
             trayMenu = new ContextMenuStrip();
             var trayExitItem = new ToolStripMenuItem("終了");
@@ -1498,7 +1532,7 @@ namespace UniConsul.Forms
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Vertical,
-                SplitterDistance = 400
+                SplitterDistance = DefaultCalendarSplitter
             };
             calendarTabPage.Controls.Add(calendarSplitContainer);
 
@@ -1506,7 +1540,7 @@ namespace UniConsul.Forms
             {
                 Dock = DockStyle.Fill,
                 Orientation = Orientation.Horizontal,
-                SplitterDistance = 350
+                SplitterDistance = DefaultCalendarLeftSplitter
             };
             calendarSplitContainer.Panel1.Controls.Add(calendarLeftSplitContainer);
 
@@ -1761,6 +1795,23 @@ namespace UniConsul.Forms
             UpdateTheme();
         }
 
+        private void ApplyDarkThemeToControls(Control parent)
+        {
+            foreach (Control c in parent.Controls)
+            {
+                if (isDarkMode) {
+                    if (c is ComboBox || c is DateTimePicker || c is TextBox || c is ListBox || c is ListView || c is ScrollBar) {
+                        SetWindowTheme(c.Handle, "DarkMode_Explorer", null);
+                    }
+                } else {
+                    if (c is ComboBox || c is DateTimePicker || c is TextBox || c is ListBox || c is ListView || c is ScrollBar) {
+                        SetWindowTheme(c.Handle, "Explorer", null);
+                    }
+                }
+                if (c.HasChildren) ApplyDarkThemeToControls(c);
+            }
+        }
+
         private void UpdateTheme()
         {
             if (mainToolTip != null)
@@ -1779,17 +1830,22 @@ namespace UniConsul.Forms
                 int useImmersiveDarkMode = isDarkMode ? 1 : 0;
                 DwmSetWindowAttribute(this.Handle, 20, ref useImmersiveDarkMode, sizeof(int));
                 DwmSetWindowAttribute(this.Handle, 19, ref useImmersiveDarkMode, sizeof(int));
+                
+                // タイトルバーの色を強制的に再描画・反映させるトリック
+                bool currentTopMost = this.TopMost;
+                this.TopMost = !currentTopMost;
+                this.TopMost = currentTopMost;
             }
             catch { }
 
-            Color darkBg = Color.FromArgb(45, 45, 48);
-            Color darkSurface = Color.FromArgb(30, 30, 30);
+            Color darkBg = Color.FromArgb(30, 30, 30);
+            Color darkSurface = Color.FromArgb(37, 37, 38);
             Color darkText = Color.White;
 
             this.BackColor = isDarkMode ? darkBg : SystemColors.Control;
 
             if (taskDataGridView != null) {
-                taskDataGridView.DefaultCellStyle.SelectionBackColor = isDarkMode ? Color.DodgerBlue : SystemColors.Highlight;
+                taskDataGridView.DefaultCellStyle.SelectionBackColor = isDarkMode ? Color.FromArgb(0, 120, 215) : SystemColors.Highlight;
                 taskDataGridView.DefaultCellStyle.SelectionForeColor = isDarkMode ? Color.White : SystemColors.HighlightText;
             }
 
@@ -1803,6 +1859,8 @@ namespace UniConsul.Forms
                 mainMenu.ForeColor = darkText; toolStrip.ForeColor = darkText; statusBar.ForeColor = darkText;
 
                 mainContainer.BackColor = darkBg;
+                mainContainer.Panel1.BackColor = darkBg;
+                mainContainer.Panel2.BackColor = darkBg;
                 listTabPage.BackColor = darkSurface;
                 kanbanTabPage.BackColor = darkSurface;
                 calendarTabPage.BackColor = darkSurface;
@@ -1826,6 +1884,10 @@ namespace UniConsul.Forms
                 qCmbDensity.BackColor = darkBg;
                 qCmbDensity.ForeColor = darkText;
             }
+                if (qNumTimeStart != null) { qNumTimeStart.BackColor = darkBg; qNumTimeStart.ForeColor = darkText; }
+                if (qNumTimeEnd != null) { qNumTimeEnd.BackColor = darkBg; qNumTimeEnd.ForeColor = darkText; }
+                if (qNumPomodoro != null) { qNumPomodoro.BackColor = darkBg; qNumPomodoro.ForeColor = darkText; }
+                if (qTbOpacity != null) { qTbOpacity.BackColor = darkSurface; }
 
             if (chkAutoTrackerMain != null) {
                 chkAutoTrackerMain.BackColor = darkBg;
@@ -1846,11 +1908,11 @@ namespace UniConsul.Forms
                     taskDataGridView.ColumnHeadersDefaultCellStyle.ForeColor = darkText;
                     taskDataGridView.ColumnHeadersDefaultCellStyle.SelectionBackColor = darkBg;
                     taskDataGridView.ColumnHeadersDefaultCellStyle.SelectionForeColor = darkText;
-                    taskDataGridView.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(40, 40, 43);
+                    taskDataGridView.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(42, 42, 45);
                     taskDataGridView.DefaultCellStyle.BackColor = darkSurface;
                     taskDataGridView.DefaultCellStyle.ForeColor = darkText;
                     taskDataGridView.BackgroundColor = darkSurface;
-                    taskDataGridView.DefaultCellStyle.SelectionBackColor = Color.DodgerBlue;
+                    taskDataGridView.DefaultCellStyle.SelectionBackColor = Color.FromArgb(0, 120, 215);
                     taskDataGridView.DefaultCellStyle.SelectionForeColor = Color.White;
                 }
             }
@@ -1863,6 +1925,8 @@ namespace UniConsul.Forms
                 mainMenu.ForeColor = SystemColors.ControlText; toolStrip.ForeColor = SystemColors.ControlText; statusBar.ForeColor = SystemColors.ControlText;
 
                 mainContainer.BackColor = SystemColors.Control;
+                mainContainer.Panel1.BackColor = SystemColors.Control;
+                mainContainer.Panel2.BackColor = SystemColors.Control;
                 listTabPage.BackColor = SystemColors.Window;
                 kanbanTabPage.BackColor = SystemColors.Window;
                 calendarTabPage.BackColor = SystemColors.Window;
@@ -1885,6 +1949,10 @@ namespace UniConsul.Forms
                     qCmbDensity.BackColor = SystemColors.Window;
                     qCmbDensity.ForeColor = SystemColors.WindowText;
                 }
+                if (qNumTimeStart != null) { qNumTimeStart.BackColor = SystemColors.Window; qNumTimeStart.ForeColor = SystemColors.WindowText; }
+                if (qNumTimeEnd != null) { qNumTimeEnd.BackColor = SystemColors.Window; qNumTimeEnd.ForeColor = SystemColors.WindowText; }
+                if (qNumPomodoro != null) { qNumPomodoro.BackColor = SystemColors.Window; qNumPomodoro.ForeColor = SystemColors.WindowText; }
+                if (qTbOpacity != null) { qTbOpacity.BackColor = SystemColors.Window; }
 
             if (chkAutoTrackerMain != null) {
                 chkAutoTrackerMain.BackColor = SystemColors.Control;
@@ -1920,6 +1988,8 @@ namespace UniConsul.Forms
 
             tabControl.Invalidate();
             if (fileListView != null) fileListView.Invalidate();
+            
+            ApplyDarkThemeToControls(this);
             UpdateAllViews();
         }
 
@@ -3252,9 +3322,9 @@ namespace UniConsul.Forms
                     {
                         itemsPanel.Tag = currentDate;
                         bool isHoliday = holidays.ContainsKey(currentDate.ToString("yyyy-MM-dd"));
-                        Color backColor = isDarkMode ? Color.FromArgb(45, 45, 48) : SystemColors.Window;
-                        if (currentDate.Month != dateInMonth.Month) backColor = isDarkMode ? Color.FromArgb(30, 30, 30) : SystemColors.Control;
-                        else if (currentDate.Date == DateTime.Today) backColor = isDarkMode ? Color.FromArgb(60, 60, 30) : Color.FromArgb(255, 255, 224);
+                        Color backColor = isDarkMode ? Color.FromArgb(37, 37, 38) : SystemColors.Window;
+                        if (currentDate.Month != dateInMonth.Month) backColor = isDarkMode ? Color.FromArgb(25, 25, 25) : SystemColors.Control;
+                        else if (currentDate.Date == DateTime.Today) backColor = isDarkMode ? Color.FromArgb(45, 50, 45) : Color.FromArgb(255, 255, 224);
                         else if (colorWeekend || isHoliday)
                         {
                             if (isHoliday || currentDate.DayOfWeek == DayOfWeek.Sunday) backColor = isDarkMode ? Color.FromArgb(65, 40, 40) : Color.FromArgb(255, 240, 240);
@@ -3373,12 +3443,12 @@ namespace UniConsul.Forms
             bool isSelected = date.Date == selectedCalendarDate.Date;
 
             if (isSelected) {
-                using (var pen = new Pen(isDarkMode ? Color.DodgerBlue : SystemColors.Highlight, 3)) g.DrawRectangle(pen, 1, 1, rect.Width - 3, rect.Height - 3);
+                using (var pen = new Pen(isDarkMode ? Color.FromArgb(0, 120, 215) : SystemColors.Highlight, 3)) g.DrawRectangle(pen, 1, 1, rect.Width - 3, rect.Height - 3);
             } else if (isToday) {
-                Color todayColor = isColorVisionSupport ? Color.FromArgb(213, 94, 0) : (isDarkMode ? Color.Tomato : Color.OrangeRed);
+                Color todayColor = isColorVisionSupport ? Color.FromArgb(213, 94, 0) : (isDarkMode ? Color.FromArgb(0, 150, 255) : Color.OrangeRed);
                 using (var pen = new Pen(todayColor, 2)) g.DrawRectangle(pen, 1, 1, rect.Width - 3, rect.Height - 3);
             } else {
-                using (var pen = new Pen(isDarkMode ? Color.FromArgb(70, 70, 70) : Color.LightGray)) {
+                using (var pen = new Pen(isDarkMode ? Color.FromArgb(55, 55, 55) : Color.LightGray)) {
                     g.DrawLine(pen, 0, rect.Height - 1, rect.Width, rect.Height - 1);
                     g.DrawLine(pen, rect.Width - 1, 0, rect.Width - 1, rect.Height);
                 }
@@ -3450,7 +3520,7 @@ namespace UniConsul.Forms
 
         private Panel CreateDayInfoCard(string itemType, string title, string details, Color indicatorColor, object itemData, DateTime date)
         {
-            var card = new Panel { Size = new Size(300, string.IsNullOrEmpty(details) ? 40 : 55), Margin = new Padding(5, 5, 5, 0), BackColor = isDarkMode ? Color.FromArgb(45, 45, 48) : SystemColors.Window, BorderStyle = BorderStyle.FixedSingle };
+            var card = new Panel { Size = new Size(300, string.IsNullOrEmpty(details) ? 45 : 65), Margin = new Padding(5, 5, 5, 0), BackColor = isDarkMode ? Color.FromArgb(45, 45, 48) : SystemColors.Window, BorderStyle = BorderStyle.FixedSingle };
             var colorBar = new Panel { Dock = DockStyle.Left, Width = 5, BackColor = indicatorColor };
             card.Controls.Add(colorBar);
             
@@ -3460,11 +3530,11 @@ namespace UniConsul.Forms
             else if (itemType == "Task") displayType = "タスク期日";
 
             var lblType = new Label { Text = string.Format("[{0}]", displayType), ForeColor = indicatorColor, Location = new Point(10, 5), AutoSize = true, Font = new Font("Meiryo UI", 8, FontStyle.Bold) };
-            var lblTitle = new Label { Text = title, ForeColor = isDarkMode ? Color.White : SystemColors.ControlText, Location = new Point(15, 22), AutoSize = true, Font = new Font("Meiryo UI", 9) };
+            var lblTitle = new Label { Text = title, ForeColor = isDarkMode ? Color.White : SystemColors.ControlText, Location = new Point(15, 23), AutoSize = true, Font = new Font("Meiryo UI", 9) };
             card.Controls.Add(lblType); card.Controls.Add(lblTitle);
             
             if (!string.IsNullOrEmpty(details)) {
-                var lblDetails = new Label { Text = details, ForeColor = isDarkMode ? Color.Silver : Color.DimGray, Location = new Point(20, 38), AutoSize = true, Font = new Font("Meiryo UI", 8, FontStyle.Italic) };
+                var lblDetails = new Label { Text = details, ForeColor = isDarkMode ? Color.Silver : Color.DimGray, Location = new Point(20, 42), AutoSize = true, Font = new Font("Meiryo UI", 8, FontStyle.Italic) };
                 card.Controls.Add(lblDetails);
             }
             
@@ -4746,7 +4816,7 @@ namespace UniConsul.Forms
             int viewWidth = panel.Width;
             int centerX = (int)(viewWidth * timelineSplitterRatio); // 動的に変更された割合を使って中央線を描画する
 
-            g.Clear(isDarkMode ? Color.FromArgb(45, 45, 48) : SystemColors.Window);
+            g.Clear(isDarkMode ? Color.FromArgb(30, 30, 30) : SystemColors.Window);
             if (viewHeight <= 0) return;
 
             float pixelsPerMinute = (float)viewHeight / (totalHours * 60);
@@ -4755,8 +4825,8 @@ namespace UniConsul.Forms
             using (var headerFont = new Font("Meiryo UI", 10, FontStyle.Bold))
             using (var itemFont = new Font("Meiryo UI", 8))
             using (var itemTextBrush = new SolidBrush(Color.White))
-            using (var linePen = new Pen(isDarkMode ? Color.FromArgb(70, 70, 70) : Color.LightGray))
-            using (var separatorPen = new Pen(isDarkMode ? Color.Gray : Color.DarkGray, 2))
+            using (var linePen = new Pen(isDarkMode ? Color.FromArgb(55, 55, 55) : Color.LightGray))
+            using (var separatorPen = new Pen(isDarkMode ? Color.FromArgb(80, 80, 80) : Color.DarkGray, 2))
             using (var textBrush = new SolidBrush(isDarkMode ? Color.FromArgb(220, 220, 220) : Color.DimGray))
             {
                 // 1. 時間グリッドとラベル
@@ -4979,19 +5049,19 @@ namespace UniConsul.Forms
                 // 5. ドラッグ中のゴーストとスナップ線
                 if (panel.Capture && !ghostRect.IsEmpty)
                 {
-                    Color selColor = isDarkMode ? Color.DodgerBlue : SystemColors.Highlight;
+                    Color selColor = isDarkMode ? Color.FromArgb(0, 120, 215) : SystemColors.Highlight;
                     using (var ghostBrush = new SolidBrush(Color.FromArgb(100, selColor))) g.FillRectangle(ghostBrush, ghostRect);
                 }
                 if (snapLineY > -1)
                 {
-                    Color snapColor = isDarkMode ? Color.DodgerBlue : SystemColors.Highlight;
+                    Color snapColor = isDarkMode ? Color.FromArgb(0, 120, 215) : SystemColors.Highlight;
                     using (var snapPen = new Pen(snapColor, 1) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash }) g.DrawLine(snapPen, centerX, snapLineY, viewWidth, snapLineY);
                 }
 
                 // 6. 確定された選択範囲の描画
                 if (!panel.Capture && selectedTimeRangeStart.HasValue && selectedTimeRangeEnd.HasValue && !selectedTimeRangeRect.IsEmpty)
                 {
-                    Color selColor = isDarkMode ? Color.DodgerBlue : SystemColors.Highlight;
+                    Color selColor = isDarkMode ? Color.FromArgb(0, 120, 215) : SystemColors.Highlight;
                     using (var selectionBrush = new SolidBrush(Color.FromArgb(80, selColor)))
                     using (var selectionBorderPen = new Pen(selColor, 1) { DashStyle = System.Drawing.Drawing2D.DashStyle.Dash })
                     {
@@ -6844,56 +6914,46 @@ namespace UniConsul.Forms
                 this.TopMost = Settings.AlwaysOnTop;
                 this.Opacity = Settings.WindowOpacity >= 0.1 ? Settings.WindowOpacity : 1.0;
 
-                if (Settings.WindowWidth >= 800) this.Width = Settings.WindowWidth;
-                if (Settings.WindowHeight >= 600) this.Height = Settings.WindowHeight;
+                // 💡 UI構築完了後に安全にサイズとスプリッターを適用する
+                this.BeginInvoke(new Action(() => {
+                    bool useDefaults = !Settings.RememberWindowSize || Settings.WindowWidth < 800 || Settings.WindowHeight < 600;
 
-                try {
-                    if (Settings.MainSplitterDistance > 10 && Settings.MainSplitterDistance < this.Height)
-                        mainContainer.SplitterDistance = Settings.MainSplitterDistance;
-                        
-                    if (Settings.FilesSplitterDistance > 10 && Settings.FilesSplitterDistance < this.Width)
-                        associatedFilesSplitContainer.SplitterDistance = Settings.FilesSplitterDistance;
-                        
-                    // 💡 タイムラインの最小幅を保護
-                    if (Settings.CalendarSplitterDistance < 200)
-                    {
-                        Settings.CalendarSplitterDistance = 200;
+                    if (useDefaults) {
+                        this.Width = DefaultWindowWidth;
+                        this.Height = DefaultWindowHeight;
+                    } else {
+                        this.Width = Settings.WindowWidth;
+                        this.Height = Settings.WindowHeight;
                     }
-                    
-                    if (Settings.CalendarSplitterDistance > this.Width - 150)
-                    {
-                        Settings.CalendarSplitterDistance = Math.Max(100, this.Width - 150);
-                    }
-                    dataService.SaveToJson(dataService.SettingsFile, Settings);
+                    this.PerformLayout();
 
-                    // 💡 カレンダー詳細（左下）が潰れるのを防ぐ
-                    if (Settings.CalendarLeftSplitterDistance > this.Height - 150)
-                    {
-                        Settings.CalendarLeftSplitterDistance = Math.Max(100, this.Height - 150);
-                    }
+                    // メインと関連ファイルのスプリッター
+                    int mainSplit = useDefaults || Settings.MainSplitterDistance <= 10 ? DefaultMainSplitter : Settings.MainSplitterDistance;
+                    try { if (mainSplit < this.Height) mainContainer.SplitterDistance = mainSplit; } catch { }
 
-                    // 💡 スプリッターの幅をコンテナの実際のサイズに収まるように安全に適用する
-                    if (calendarSplitContainer.Width > 50)
-                    {
-                        int maxSplitter = calendarSplitContainer.Width - calendarSplitContainer.Panel2MinSize - 10;
-                        int safeDist = Math.Min(Settings.CalendarSplitterDistance, maxSplitter);
-                        if (safeDist > calendarSplitContainer.Panel1MinSize)
-                            calendarSplitContainer.SplitterDistance = safeDist;
-                    }
-                        
-                    if (Settings.CalendarLeftSplitterDistance > 10 && Settings.CalendarLeftSplitterDistance < this.Height)
-                        calendarLeftSplitContainer.SplitterDistance = Settings.CalendarLeftSplitterDistance;
-                        
-                    // 💡 予定と実績の比率が極端に偏っている場合は 0.5 (均等) に強制補正
-                    if (Settings.TimelineSplitterRatio < 0.3f || Settings.TimelineSplitterRatio > 0.7f)
-                    {
-                        Settings.TimelineSplitterRatio = 0.5f;
-                        dataService.SaveToJson(dataService.SettingsFile, Settings);
-                    }
+                    int fileSplit = useDefaults || Settings.FilesSplitterDistance <= 10 ? DefaultFilesSplitter : Settings.FilesSplitterDistance;
+                    try { if (fileSplit < this.Width) associatedFilesSplitContainer.SplitterDistance = fileSplit; } catch { }
 
-                    if (Settings.TimelineSplitterRatio >= 0.1f && Settings.TimelineSplitterRatio <= 0.9f)
-                        timelineSplitterRatio = Settings.TimelineSplitterRatio;
-                } catch {}
+                    // カレンダー関連のスプリッター（非表示タブ内なので一時的に表示して強制適用する）
+                    int calSplit = useDefaults || Settings.CalendarSplitterDistance <= 10 ? DefaultCalendarSplitter : Settings.CalendarSplitterDistance;
+                    int calLeftSplit = useDefaults || Settings.CalendarLeftSplitterDistance <= 10 ? DefaultCalendarLeftSplitter : Settings.CalendarLeftSplitterDistance;
+
+                    var prevTab = tabControl.SelectedTab;
+                    tabControl.SelectedTab = calendarTabPage;
+                    try { calendarSplitContainer.SplitterDistance = calSplit; } catch { }
+                    try { calendarLeftSplitContainer.SplitterDistance = calLeftSplit; } catch { }
+                    tabControl.SelectedTab = prevTab;
+                    mainContainer.Panel2Collapsed = (tabControl.SelectedTab != listTabPage);
+
+                    if (useDefaults) {
+                        timelineSplitterRatio = 0.5f;
+                    } else {
+                        try {
+                            if (Settings.TimelineSplitterRatio < 0.3f || Settings.TimelineSplitterRatio > 0.7f) { Settings.TimelineSplitterRatio = 0.5f; dataService.SaveToJson(dataService.SettingsFile, Settings); }
+                            if (Settings.TimelineSplitterRatio >= 0.1f && Settings.TimelineSplitterRatio <= 0.9f) timelineSplitterRatio = Settings.TimelineSplitterRatio;
+                        } catch {}
+                    }
+                }));
             }
         }
 

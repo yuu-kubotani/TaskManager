@@ -1,4 +1,6 @@
-﻿﻿using System.Drawing;
+﻿﻿﻿using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using UniConsul.Native;
 
@@ -6,6 +8,9 @@ namespace UniConsul
 {
     public static class ThemeManager
     {
+        [DllImport("uxtheme.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+        public static extern int SetWindowTheme(IntPtr hWnd, string pszSubAppName, string pszSubIdList);
+
         public static void ApplyTheme(Form form, bool isDarkMode)
         {
             // --- 全フォーム共通でアイコンを適用する ---
@@ -17,21 +22,29 @@ namespace UniConsul
                     string pngPath = System.IO.Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, "uni consul（ユニコン）.png");
                     if (!System.IO.File.Exists(pngPath)) pngPath = @"C:\Users\kuyuu\OneDrive\デスクトップ\TaskManager\uni consul（ユニコン）.png";
                     if (System.IO.File.Exists(pngPath)) {
-                        using (var bmp = new Bitmap(pngPath)) { form.Icon = Icon.FromHandle(bmp.GetHicon()); }
+                        using (Bitmap originalBmp = new Bitmap(pngPath))
+                        {
+                            Bitmap bmp = new Bitmap(originalBmp.Width, originalBmp.Height);
+                            using (Graphics g = Graphics.FromImage(bmp)) { g.Clear(Color.Transparent); g.DrawImage(originalBmp, 0, 0); }
+                            IntPtr hIcon = bmp.GetHicon();
+                            form.Icon = Icon.FromHandle(hIcon);
+                        }
                     }
                 }
             } catch { }
             // ----------------------------------------
 
-            Color backColor = isDarkMode ? Color.FromArgb(30, 30, 30) : SystemColors.Control;
+            Color backColor = isDarkMode ? Color.FromArgb(30, 30, 30) : SystemColors.Control; // 一番奥の背景（深い黒）
             Color foreColor = isDarkMode ? Color.White : SystemColors.ControlText;
-            Color controlBack = isDarkMode ? Color.FromArgb(45, 45, 48) : SystemColors.Window;
+            Color controlBack = isDarkMode ? Color.FromArgb(37, 37, 38) : SystemColors.Window; // 手前のコントロール（少し明るい黒）
             Color controlFore = isDarkMode ? Color.White : SystemColors.WindowText;
-            Color buttonBack = isDarkMode ? Color.FromArgb(85, 85, 85) : SystemColors.Control;
+            Color buttonBack = isDarkMode ? Color.FromArgb(50, 50, 55) : SystemColors.Control;
 
             form.BackColor = backColor;
             form.ForeColor = foreColor;
-            ApplyThemeToControls(form.Controls, backColor, foreColor, controlBack, controlFore, buttonBack, isDarkMode);
+            // フォーム自体（AutoScrollの画面）のスクロールバーもダークモード化する
+            SetWindowTheme(form.Handle, isDarkMode ? "DarkMode_Explorer" : "Explorer", null);
+            ApplyThemeToControls(form, form.Controls, backColor, foreColor, controlBack, controlFore, buttonBack, isDarkMode);
         }
 
         public static void ApplyDarkModeToWindow(System.IntPtr handle, bool isDarkMode)
@@ -45,11 +58,29 @@ namespace UniConsul
             catch { }
         }
 
-        private static void ApplyThemeToControls(Control.ControlCollection controls, Color backColor, Color foreColor, Color controlBack, Color controlFore, Color buttonBack, bool isDarkMode)
+        private static void ApplyThemeToControls(Form form, Control.ControlCollection controls, Color backColor, Color foreColor, Color controlBack, Color controlFore, Color buttonBack, bool isDarkMode)
         {
+            string themeName = isDarkMode ? "DarkMode_Explorer" : "Explorer";
+            
             foreach (Control ctrl in controls)
             {
-                if (ctrl is Panel || ctrl is GroupBox || ctrl is SplitContainer || ctrl is SplitterPanel)
+                if (ctrl is ComboBox)
+                {
+                    SetWindowTheme(ctrl.Handle, isDarkMode ? "DarkMode_CFD" : "Explorer", null);
+                }
+                else if (ctrl is TabControl)
+                {
+                    var tc = (TabControl)ctrl;
+                    SetWindowTheme(tc.Handle, "", "");
+                    tc.Appearance = TabAppearance.Normal;
+                }
+                // スクロールバーを持つ可能性のあるコントロール（※DateTimePickerは白化の元凶になるため除外）
+                else if (ctrl is DataGridView || ctrl is TextBox || ctrl is TextBoxBase || ctrl is ListBox || ctrl is ListView || ctrl is TreeView || ctrl is NumericUpDown || ctrl is ScrollBar || ctrl is Panel)
+                {
+                    SetWindowTheme(ctrl.Handle, themeName, null);
+                }
+
+                if (ctrl is Panel || ctrl is GroupBox || ctrl is SplitContainer || ctrl is SplitterPanel || ctrl is TableLayoutPanel || ctrl is FlowLayoutPanel)
                 {
                     ctrl.BackColor = backColor;
                     ctrl.ForeColor = foreColor;
@@ -58,19 +89,25 @@ namespace UniConsul
                 {
                     ctrl.BackColor = controlBack;
                     ctrl.ForeColor = foreColor;
-                    if (ctrl is ComboBox) ((ComboBox)ctrl).FlatStyle = FlatStyle.Flat;
+                    if (ctrl is ComboBox) 
+                    {
+                        // FlatStyle が Flat だとネイティブのダークテーマが無視されて白くなるため System にする
+                        ((ComboBox)ctrl).FlatStyle = isDarkMode ? FlatStyle.System : FlatStyle.Flat;
+                    }
                     if (ctrl is TextBox) ((TextBox)ctrl).BorderStyle = BorderStyle.FixedSingle;
                 }
                 else if (ctrl is DateTimePicker)
                 {
                     var dtp = (DateTimePicker)ctrl;
-                    dtp.BackColor = controlBack;
-                    dtp.ForeColor = foreColor;
+                    // WinFormsの仕様上、DateTimePickerの入力欄はOSのシステムカラーで固定されるため設定を除外
+
+                    UniConsul.Utils.UIUtility.ApplyDarkCalendar(dtp, form);
                 }
                 else if (ctrl is DataGridView)
                 {
                     var dgv = (DataGridView)ctrl;
-                    dgv.BackgroundColor = controlBack;
+                    // リストのさらに裏側の余白部分をダーク背景色と同化させて白浮きを防ぐ
+                    dgv.BackgroundColor = backColor;
                     dgv.DefaultCellStyle.BackColor = controlBack;
                     dgv.DefaultCellStyle.ForeColor = controlFore;
                     dgv.ColumnHeadersDefaultCellStyle.BackColor = backColor;
@@ -90,7 +127,14 @@ namespace UniConsul
                 else if (ctrl is Label || ctrl is CheckBox || ctrl is RadioButton || ctrl is TabPage)
                 {
                     ctrl.ForeColor = foreColor;
-                    if (ctrl is TabPage) ctrl.BackColor = controlBack;
+                    if (ctrl is TabPage) 
+                    {
+                        var tp = (TabPage)ctrl;
+                        // OSのテーマ描画ロックを解除し、自前のダーク背景色を反映させる
+                        tp.UseVisualStyleBackColor = false;
+                        // カレンダーやリストの裏地（TabPage）をダーク背景色に統一
+                        tp.BackColor = backColor;
+                    }
                 }
                 else if (ctrl is ListBox || ctrl is ListView || ctrl is PropertyGrid)
                 {
@@ -100,7 +144,7 @@ namespace UniConsul
 
                 if (ctrl.Controls.Count > 0)
                 {
-                    ApplyThemeToControls(ctrl.Controls, backColor, foreColor, controlBack, controlFore, buttonBack, isDarkMode);
+                    ApplyThemeToControls(form, ctrl.Controls, backColor, foreColor, controlBack, controlFore, buttonBack, isDarkMode);
                 }
             }
         }
