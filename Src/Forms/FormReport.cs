@@ -1,4 +1,4 @@
-﻿﻿﻿﻿// 最新版: コンパイルエラー修復済み
+﻿﻿// 最新版: コンパイルエラー修復済み
 using System;
 using System.Collections.Generic;
 using System.Drawing;
